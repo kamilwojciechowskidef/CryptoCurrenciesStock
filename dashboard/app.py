@@ -1,244 +1,317 @@
 # dashboard/app.py
-import calendar
-from datetime import datetime, timezone, timedelta
+import os
+import sys
+from datetime import datetime, timedelta, timezone
 
+import numpy as np
+import pandas as pd
+import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-import streamlit as st
 
-import sys
-sys.path.append("C:/Users/kamil/Desktop/CryptoCurrenciesStock")
+# --- ścieżki importów (dostosuj jeśli potrzebujesz) ---
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.append(ROOT)
 
-# --- DB API (read-only) ---
-from db.db import list_coins, get_history, get_history_all
+from db.db import list_coins, get_history, get_history_all  # noqa: E402
 
-# --- Transformacje (ETL-side helpers) ---
-from etl.transform_data import (
-    history_postprocess,
-    allcoins_postprocess,
-    add_index_100,
-    volume_with_share,
-)
+# =========================
+#        Caching
+# =========================
+@st.cache_data(ttl=300)
+def cached_list_coins() -> pd.DataFrame:
+    return list_coins()
 
-# -------------- PAGE CONFIG --------------
-st.set_page_config("CryptoCurrencies Dashboard", layout="wide")
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_history(cid: str, start: datetime, end: datetime) -> pd.DataFrame:
+    return get_history(cid, start, end)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_history_all(start: datetime, end: datetime) -> pd.DataFrame:
+    return get_history_all(start, end)
+
+# =========================
+#        Utils
+# =========================
+def first_day(year: int, month: int) -> datetime:
+    return datetime(year, month, 1, tzinfo=timezone.utc)
+
+def next_month(year: int, month: int) -> tuple[int, int]:
+    if month == 12:
+        return (year + 1, 1)
+    return (year, month + 1)
+
+def last_month_start(year: int, month: int) -> datetime:
+    return first_day(*next_month(year, month))
+
+def add_mas(df: pd.DataFrame, price_col: str = "price", windows=(7, 30)) -> pd.DataFrame:
+    df = df.sort_values("ts").copy()
+    for w in windows:
+        df[f"MA{w}"] = df[price_col].rolling(window=w, min_periods=1).mean()
+    return df
+
+def index_to_100(df: pd.DataFrame, price_col: str = "price", group_col: str = "coin_id") -> pd.DataFrame:
+    out = []
+    for cid, g in df.sort_values("ts").groupby(group_col, sort=False):
+        g = g.copy()
+        base = g[price_col].iloc[0]
+        g["price_norm"] = (g[price_col] / base) * 100.0 if base and base != 0 else np.nan
+        out.append(g)
+    return pd.concat(out, ignore_index=True) if out else df.copy()
+
+def nice_delta_pct(a: float, b: float) -> float:
+    try:
+        return (a / b - 1.0) * 100.0
+    except Exception:
+        return np.nan
+
+# stałe kolory dla monet
+base_palette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+    "#bcbd22", "#17becf", "#4e79a7", "#f28e2b",
+]
+def build_color_map(names: list[str]) -> dict[str, str]:
+    cmap = {}
+    for i, name in enumerate(names):
+        cmap[name] = base_palette[i % len(base_palette)]
+    return cmap
+
+# =========================
+#        UI
+# =========================
+st.set_page_config(page_title="CryptoCurrencies Dashboard", layout="wide")
 st.title("CryptoCurrencies Dashboard")
 
-# -------------- COIN SELECTION --------------
-coins = list_coins()
-if coins.empty:
-    st.warning("Brak danych w bazie. Najpierw uruchom ETL (backfill lub snapshot).")
+coins_df = cached_list_coins()
+if coins_df.empty:
+    st.warning("Brak danych w bazie. Uruchom ETL (fetch → save).")
     st.stop()
 
-coins["label"] = coins["name"].fillna(coins["coin_id"])
-label_to_cid = dict(zip(coins["label"], coins["coin_id"]))
-labels_all = coins["label"].tolist()
+coins_df = coins_df.sort_values("name")
+all_names = coins_df["name"].tolist()
+name_to_id = dict(zip(coins_df["name"], coins_df["coin_id"]))
+id_to_name = dict(zip(coins_df["coin_id"], coins_df["name"]))
 
-selected_labels = st.multiselect(
-    "Select cryptocurrencies:",
-    options=["All"] + labels_all,
-    default=["All"],
-)
+# ---- filtry (multi-select i zakres dat rok/miesiąc) ----
+col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 1, 1, 1, 1])
 
-if not selected_labels:
-    st.stop()
+with col_f1:
+    selection = st.multiselect(
+        "Select cryptocurrencies",
+        ["All"] + all_names,
+        default=["All"],
+        help="Możesz wybrać jedną, kilka lub All.",
+    )
 
-if "All" in selected_labels:
-    selected_labels = labels_all
-
-selected_ids = [label_to_cid[l] for l in selected_labels]
-
-# -------------- DATE SLICERS (year/month → year/month) --------------
 now = datetime.now(timezone.utc)
-years = list(range(now.year-1, now.year + 1))
-months = list(range(1, 13))
+years = list(range(2020, now.year + 1))
 
-c_y1, c_m1, c_y2, c_m2 = st.columns(4)
-with c_y1:
-    y_start = st.selectbox("Start year", years, index=years.index(now.year))
-with c_m1:
-    m_start = st.selectbox("Start month", months, index=0)
-with c_y2:
-    y_end = st.selectbox("End year", years, index=years.index(now.year))
-with c_m2:
-    m_end = st.selectbox("End month", months, index=now.month - 1)
+with col_f2:
+    start_year = st.selectbox("Start year", years, index=max(0, years.index(now.year) - 1))
+with col_f3:
+    start_month = st.selectbox("Start month", list(range(1, 13)), index=now.month - 1)
 
-# przedział [start, end_next)
-start_dt = datetime(y_start, m_start, 1, tzinfo=timezone.utc)
-end_next = (datetime(y_end, m_end, 1, tzinfo=timezone.utc) + timedelta(days=32)).replace(day=1)
+with col_f4:
+    end_year = st.selectbox("End year", years, index=years.index(now.year))
+with col_f5:
+    end_month = st.selectbox("End month", list(range(1, 13)), index=now.month - 1)
 
-# -------------- KPI --------------
-recent_start, recent_end = now - timedelta(days=60), now  # okno do MA7/MA30
+start_dt = first_day(start_year, start_month)
+end_dt = last_month_start(end_year, end_month)  # zakres [start_dt, end_dt)
 
+# wybór ID monet
+if "All" in selection or len(selection) == 0:
+    selected_names = all_names
+else:
+    selected_names = selection
+selected_ids = [name_to_id[n] for n in selected_names]
+
+# kolorystyka dla zaznaczonych
+color_map = build_color_map(selected_names)
+
+# =========================
+#    Dane do wykresów
+# =========================
+# 1) zbiorczo dla wszystkich wybranych monet
+hist_all = cached_get_history_all(start_dt, end_dt)
+hist_all = hist_all[hist_all["coin_id"].isin(selected_ids)].copy()
+
+# Jeśli nie ma danych, kończymy
+if hist_all.empty:
+    st.info("Brak danych w wybranym zakresie.")
+    st.stop()
+
+# 2) KPI – osobno dla pojedynczej monety vs wielu
 if len(selected_ids) == 1:
-    # 1 moneta → 3 metryki + wykres Price&MA
     cid = selected_ids[0]
-    lab = selected_labels[0]
-    df_one = history_postprocess(get_history(cid, recent_start, recent_end))
-
-    k1, k2, k3 = st.columns(3)
-    if df_one.empty:
-        with k1: st.metric(f"{lab} — Current Price", "—")
-        with k2: st.metric("7-day avg", "—")
-        with k3: st.metric("30-day avg", "—")
+    single = cached_get_history(cid, start_dt, end_dt)
+    if single.empty:
+        st.info("Brak danych dla wybranej monety.")
     else:
-        last_price = float(df_one["price"].iloc[-1])
-        ma7 = float(df_one["ma7"].iloc[-1])
-        ma30 = float(df_one["ma30"].iloc[-1])
-        delta = float((df_one["ret"].iloc[-1] or 0) * 100)
+        single = single.rename(columns={"ts": "ts", "price": "price", "volume": "volume"})
+        single = add_mas(single, "price", windows=(7, 30))
+        latest = single.sort_values("ts").iloc[-1]
+        kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+        with kpi_col1:
+            st.metric(label=f"{id_to_name[cid]} — Current Price", value=f"${latest['price']:,.2f}")
+        with kpi_col2:
+            st.metric(label="7-day avg", value=f"${single['MA7'].iloc[-1]:,.2f}")
+        with kpi_col3:
+            st.metric(label="30-day avg", value=f"${single['MA30'].iloc[-1]:,.2f}")
 
-        with k1: st.metric(f"{lab} — Current Price", f"${last_price:,.2f}", delta=f"{delta:.2f}%")
-        with k2: st.metric("7-day avg", f"${ma7:,.2f}")
-        with k3: st.metric("30-day avg", f"${ma30:,.2f}")
-
-        fig_price = go.Figure()
-        fig_price.add_trace(go.Scatter(x=df_one["ts"], y=df_one["price"], name="Price", mode="lines"))
-        fig_price.add_trace(go.Scatter(x=df_one["ts"], y=df_one["ma7"], name="MA 7", mode="lines"))
-        fig_price.add_trace(go.Scatter(x=df_one["ts"], y=df_one["ma30"], name="MA 30", mode="lines"))
-        fig_price.update_layout(
-            title=f"{lab} — Price & Moving Averages",
+        # Price + MA
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=single["ts"], y=single["price"], mode="lines", name="Price",
+            line=dict(width=2, color=color_map[id_to_name[cid]])
+        ))
+        fig.add_trace(go.Scatter(
+            x=single["ts"], y=single["MA7"], mode="lines", name="MA 7",
+            line=dict(width=1.5, dash="dash")
+        ))
+        fig.add_trace(go.Scatter(
+            x=single["ts"], y=single["MA30"], mode="lines", name="MA 30",
+            line=dict(width=1.5, dash="dot")
+        ))
+        fig.update_layout(
+            title=f"{id_to_name[cid]} — Price & Moving Averages",
             xaxis_title="Time",
             yaxis_title="Price",
-            hovermode="x unified",
+            height=380,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=60, b=20),
         )
-        fig_price.update_xaxes(rangeslider_visible=True)
-        st.plotly_chart(fig_price, use_container_width=True)
-
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    # wiele monet → kafelki (Current / 7d / 30d) w siatce 3 kolumn
-    cols = st.columns(3)
-    ci = 0
-    for lab, cid in zip(selected_labels, selected_ids):
-        dfi = history_postprocess(get_history(cid, recent_start, recent_end))
-        if dfi.empty:
-            cols[ci].metric(f"{lab} — Current Price", "—")
-        else:
-            last_price = float(dfi["price"].iloc[-1])
-            ma7 = float(dfi["ma7"].iloc[-1])
-            ma30 = float(dfi["ma30"].iloc[-1])
-            delta = float((dfi["ret"].iloc[-1] or 0) * 100)
-            cols[ci].metric(lab, f"${last_price:,.2f}", delta=f"{delta:.2f}%")
-            cols[ci].markdown(f"**7d avg:** ${ma7:,.2f}  \n**30d avg:** ${ma30:,.2f}")
-        ci = (ci + 1) % 3
+    # kafelki KPI dla wielu monet – bieżąca cena + zmiana % vs 7d i 30d
+    tiles = []
+    recent_start = now - timedelta(days=60)
+    for cid in selected_ids:
+        df = cached_get_history(cid, max(start_dt, recent_start), end_dt)
+        if df.empty:
+            continue
+        df = df.sort_values("ts")
+        cur = df["price"].iloc[-1]
+        # 7d/30d
+        df7 = df[df["ts"] >= (now - timedelta(days=7))]
+        df30 = df[df["ts"] >= (now - timedelta(days=30))]
+        avg7 = df7["price"].mean() if not df7.empty else np.nan
+        avg30 = df30["price"].mean() if not df30.empty else np.nan
+        tiles.append({
+            "name": id_to_name[cid],
+            "cur": cur,
+            "d7": nice_delta_pct(cur, avg7) if not np.isnan(avg7) else np.nan,
+            "d30": nice_delta_pct(cur, avg30) if not np.isnan(avg30) else np.nan
+        })
 
+    if tiles:
+        st.subheader("Selected coins — quick view")
+        # po trzy KPI w wierszu
+        n = 3
+        for i in range(0, len(tiles), n):
+            cols = st.columns(n)
+            for c, t in zip(cols, tiles[i:i+n]):
+                with c:
+                    st.metric(
+                        label=f"{t['name']} — Current",
+                        value=f"${t['cur']:,.2f}",
+                        delta=f"{t['d7']:.2f}% vs 7d" if not np.isnan(t['d7']) else "—"
+                    )
+                    st.caption(f"Δ30d: {t['d30']:.2f}%") if not np.isnan(t['d30']) else st.caption("Δ30d: —")
+
+# =========================
+#   Wykresy dla wielu monet
+# =========================
 st.markdown("---")
 
-# -------------- AGGREGATED DATA (filtered by slicers & selection) --------------
-df_all = allcoins_postprocess(get_history_all(start_dt, end_next))
-df_all = df_all[df_all["coin_id"].isin(selected_ids)]
-if df_all.empty:
-    st.warning("Brak danych w wybranym zakresie / dla wybranych kryptowalut.")
-    st.stop()
+# 1) Price indexed to 100 (od startu okresu)
+st.subheader("All selected — Price (indexed to 100 at period start)")
+norm = index_to_100(
+    hist_all.rename(columns={"price": "price", "ts": "ts"}),
+    price_col="price",
+    group_col="coin_id",
+)
+norm["name"] = norm["coin_id"].map(id_to_name)
 
-# -------------- INDEXED TO 100 (only series with ≥2 points) --------------
-pts = df_all.groupby("coin_id")["ts"].count()
-df_line = df_all[df_all["coin_id"].isin(pts[pts >= 2].index)].copy()
+fig_norm = px.line(
+    norm,
+    x="ts", y="price_norm", color="name",
+    color_discrete_map=color_map,
+    labels={"ts": "Time", "price_norm": "Index (100=start)"},
+    height=380,
+)
+fig_norm.update_layout(
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=20, r=20, t=60, b=20),
+)
+st.plotly_chart(fig_norm, use_container_width=True)
 
-if not df_line.empty:
-    df_line = add_index_100(df_line)
-    df_line["label"] = df_line["name"].fillna(df_line["coin_id"])
-    fig_norm = px.line(
-        df_line,
-        x="ts",
-        y="price_norm",
-        color="label",
-        title="All coins — Price (indexed to 100 at period start)",
-        labels={"price_norm": "Index (100=start)", "ts": "Time", "label": "Crypto_currency"},
+# 2) Total trading volume (bar)
+st.subheader("All coins — Total Trading Volume in Range")
+vol = (hist_all.groupby("coin_id", as_index=False)["volume"].sum()
+       .assign(name=lambda d: d["coin_id"].map(id_to_name)))
+vol = vol.sort_values("volume", ascending=False)
+
+fig_bar = px.bar(
+    vol,
+    x="name", y="volume",
+    color="name",
+    color_discrete_map=color_map,
+    labels={"name": "Crypto_currency", "volume": "Total trading volume (sum in selected period)"},
+    height=420,
+)
+fig_bar.update_layout(
+    showlegend=True,
+    legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.02),
+    margin=dict(l=20, r=20, t=40, b=20),
+)
+st.plotly_chart(fig_bar, use_container_width=True)
+
+# 3) Share of total volume (%)
+st.subheader("All coins — Share of Total Volume")
+total_vol = vol["volume"].sum()
+vol["share"] = np.where(total_vol > 0, vol["volume"] / total_vol * 100.0, np.nan)
+
+fig_share = px.bar(
+    vol,
+    x="name", y="share",
+    color="name",
+    color_discrete_map=color_map,
+    labels={"name": "Crypto_currency", "share": "Share of volume, %"},
+    height=420,
+)
+fig_share.update_layout(
+    showlegend=True,
+    legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.02),
+    margin=dict(l=20, r=20, t=40, b=20),
+)
+st.plotly_chart(fig_share, use_container_width=True)
+
+# 4) Correlation heatmap (dzienne stopy zwrotu)
+st.subheader("All coins — Correlation of daily returns")
+# pivot: index=ts, columns=coin_id, values=price; returns=diff(pct_change)
+pivot = hist_all.pivot_table(index="ts", columns="coin_id", values="price")
+rets = pivot.sort_index().pct_change().dropna(how="all")
+if rets.shape[0] >= 5 and rets.shape[1] >= 2:
+    corr = rets.corr()
+    corr.columns = [id_to_name.get(c, c) for c in corr.columns]
+    corr.index = [id_to_name.get(i, i) for i in corr.index]
+    fig_corr = px.imshow(
+        corr, text_auto=".2f", aspect="auto", color_continuous_scale="RdBu", zmin=-1, zmax=1,
+        labels=dict(color="corr")
     )
-    st.plotly_chart(fig_norm, use_container_width=True)
+    fig_corr.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
+    st.plotly_chart(fig_corr, use_container_width=True)
 else:
-    st.info("Za mało punktów na linie indeksu w wybranym zakresie.")
+    st.caption("Za mało punktów danych, aby policzyć korelacje.")
 
-# -------------- VOLUME & SHARE (two charts side by side) --------------
-vol = volume_with_share(df_all)  # label, volume, share
-
-# stałe kolory per coin (możesz dodać kolejne)
-base_palette = ["#F7931A", "#627EEA", "#14F195", "#d62728", "#9467bd",
-                "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
-labels_sorted = vol["label"].tolist()
-color_map = {lab: base_palette[i % len(base_palette)] for i, lab in enumerate(labels_sorted)}
-color_map.update({"Bitcoin": "#F7931A", "Ethereum": "#627EEA", "Solana": "#14F195"})
-
-c_vol, c_share = st.columns(2)
-
-with c_vol:
-    fig_vol = px.bar(
-        vol,
-        x="label",
-        y="volume",
-        color="label",
-        color_discrete_map=color_map,
-        title="All coins — Total Trading Volume in Range",
-        labels={
-            "label": "Crypto_currency",
-            "volume": "Total Trading Volume (sum over selected period)",
-            "color": "Crypto_currency",
-        },
-    )
-    fig_vol.update_layout(
-        legend_title_text="Crypto_currency",
-        legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),
-        margin=dict(r=160, t=60, b=60, l=60),
-        height=600,
-        bargap=0.25,
-    )
-    fig_vol.update_yaxes(tickformat="~s")
-    fig_vol.update_traces(
-        hovertemplate="<b>%{x}</b><br>Volume: %{y:,}<extra></extra>",
-        width=0.5,
-    )
-    st.plotly_chart(fig_vol, use_container_width=True)
-
-with c_share:
-    fig_share = px.bar(
-        vol,
-        x="label",
-        y="share",
-        color="label",
-        color_discrete_map=color_map,
-        title="All coins — Share of Total Volume",
-        labels={
-            "label": "Crypto_currency",
-            "share": "Share of Total Volume (%)",
-            "color": "Crypto_currency",
-        },
-    )
-    fig_share.update_layout(
-        showlegend=False,
-        margin=dict(t=60, b=60, l=60, r=40),
-        height=600,
-        bargap=0.25,
-    )
-    fig_share.update_yaxes(range=[0, 100], ticksuffix="%", title="Share of Total Volume (%)")
-    fig_share.update_traces(
-        texttemplate="%{y:.1f}%",
-        textposition="outside",
-        cliponaxis=False,
-        hovertemplate="<b>%{x}</b><br>Share: %{y:.2f}%<extra></extra>",
-        width=0.5,
-    )
-    st.plotly_chart(fig_share, use_container_width=True)
-
-# -------------- CORRELATION HEATMAP (only if enough points) --------------
-df_corr = df_all.copy()
-pts = df_corr.groupby("coin_id")["ts"].count()
-df_corr = df_corr[df_corr["coin_id"].isin(pts[pts >= 3].index)]
-if not df_corr.empty:
-    df_corr = df_corr.sort_values(["coin_id", "ts"]).copy()
-    df_corr["ret"] = df_corr.groupby("coin_id")["price"].pct_change()
-    pivot_ret = df_corr.pivot_table(
-        index="ts",
-        columns=df_corr["name"].fillna(df_corr["coin_id"]),
-        values="ret",
-    )
-    if not pivot_ret.dropna(how="all").empty:
-        corr = pivot_ret.corr(min_periods=10)
-        fig_corr = px.imshow(
-            corr,
-            text_auto=False,
-            aspect="auto",
-            title="All coins — Correlation of Returns",
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
-    else:
-        st.info("Brak wystarczających danych do korelacji.")
+# =========================
+#  Footer
+# =========================
+st.markdown("---")
+st.caption(
+    "Tip: użyj suwaków rok/miesiąc, aby zawęzić okres. "
+    "Wybierz jedną monetę, aby zobaczyć wykres Price & MA(7/30) i KPI dla tej monety."
+)

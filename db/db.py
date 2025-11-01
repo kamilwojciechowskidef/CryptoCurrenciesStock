@@ -1,116 +1,155 @@
-# etl/db.py
+# db/db.py
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Dict, Any
+from typing import Iterable, Dict, Any, List, Optional
 
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL, Engine
+from sqlalchemy.engine import Engine, URL
 from dotenv import load_dotenv
+import sys
+sys.path.append(r"c:\Users\kamil\Desktop\CryptoCurrenciesStock")
 
 
-# ------------------------ CONFIG / ENGINE ------------------------
+# ---------------- ENV & ENGINE ----------------
 
-# Ładujemy .env (UTF-8, bez BOM). Jeśli trzymasz .env w innym miejscu, podmień ścieżkę.
-load_dotenv("etl/.env", encoding="utf-8")
+load_dotenv("etl/.env", encoding="utf-8") 
 
-def _build_engine() -> Engine:
-    """Tworzy silnik SQLAlchemy dla Postgresa (psycopg)."""
-    db_url = URL.create(
-        "postgresql+psycopg",
-        username=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        database=os.getenv("POSTGRES_DB"),
-    )
+def _make_engine() -> Engine:
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        # podmień stary driver na psycopg v3 jeśli trzeba
+        if db_url.startswith("postgresql+psycopg2://"):
+            db_url = db_url.replace("psycopg2", "psycopg", 1)
+        return create_engine(db_url, pool_pre_ping=True, future=True)
+
     return create_engine(
-        db_url,
-        pool_pre_ping=True,   # odświeża połączenie, gdy leży
+        URL.create(
+            "postgresql+psycopg",
+            username=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres"),
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=int(os.getenv("POSTGRES_PORT", "5433")),
+            database=os.getenv("POSTGRES_DB", "cryptoetl"),
+        ),
+        pool_pre_ping=True,
         future=True,
     )
 
-# Singleton engine do użycia w całym module
-engine: Engine = _build_engine()
+engine: Engine = _make_engine()
 
 
-# ------------------------ DDL (INIT) ------------------------
+# ---------------- SCHEMA ----------------
+
+DDL = """
+CREATE TABLE IF NOT EXISTS crypto_prices (
+    coin_id        TEXT        NOT NULL,
+    symbol         TEXT        NOT NULL,
+    name           TEXT        NOT NULL,
+    current_price  NUMERIC     NOT NULL,
+    total_volume   NUMERIC     NOT NULL,
+    last_updated   TIMESTAMPTZ NOT NULL
+);
+
+-- Unikalność potrzebna dla ON CONFLICT (kolumny muszą mieć UNIQUE/PK)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_crypto_prices_coin_ts
+  ON crypto_prices (coin_id, last_updated);
+
+-- Dodatkowe indeksy wspomagające zapytania
+CREATE INDEX IF NOT EXISTS idx_crypto_prices_ts
+  ON crypto_prices (last_updated);
+CREATE INDEX IF NOT EXISTS idx_crypto_prices_coin_ts
+  ON crypto_prices (coin_id, last_updated);
+"""
 
 def init_table() -> None:
-    """
-    Tworzy tabelę na potrzeby CRYPTOETL, jeśli nie istnieje.
-    Klucz główny: (coin_id, last_updated) — pozwala trzymać historię.
-    """
-    ddl = """
-    CREATE TABLE IF NOT EXISTS crypto_prices (
-        coin_id        TEXT        NOT NULL,
-        symbol         TEXT        NOT NULL,
-        name           TEXT        NOT NULL,
-        current_price  NUMERIC     NOT NULL,
-        total_volume   NUMERIC     NOT NULL,
-        last_updated   TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY (coin_id, last_updated)
-    );
-    """
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        for stmt in DDL.strip().split(";\n"):
+            s = stmt.strip()
+            if s:
+                conn.execute(text(s))
 
 
-# ------------------------ WRITE API ------------------------
+def dedupe_and_enforce_unique() -> None:
+    """Usuwa potencjalne duplikaty i upewnia się, że unikalny indeks istnieje."""
+    with engine.begin() as conn:
+        # 1) usuń duplikaty (zostaw 1 wiersz na (coin_id,last_updated))
+        conn.execute(text("""
+            WITH d AS (
+              SELECT ctid, row_number() OVER (
+                PARTITION BY coin_id, last_updated ORDER BY ctid
+              ) AS rn
+              FROM crypto_prices
+            )
+            DELETE FROM crypto_prices
+            WHERE ctid IN (SELECT ctid FROM d WHERE rn > 1);
+        """))
+        # 2) dopilnuj unikalnego indeksu
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_crypto_prices_coin_ts
+            ON crypto_prices (coin_id, last_updated);
+        """))
 
-def save_data(rows: Iterable[Dict[str, Any]]) -> int:
+
+# ---------------- WRITE API ----------------
+
+_INSERT_SQL = text("""
+    INSERT INTO crypto_prices
+        (coin_id, symbol, name, current_price, total_volume, last_updated)
+    VALUES
+        (:coin_id, :symbol, :name, :current_price, :total_volume, :last_updated)
+    ON CONFLICT (coin_id, last_updated) DO NOTHING
+""")
+
+def save_data(rows: Iterable[Dict[str, Any]], batch_size: int = 5000) -> int:
     """
-    Zapisuje rekordy do tabeli `crypto_prices`.
-    Oczekiwany kształt elementu:
-      {
-        "id": "bitcoin",            # -> coin_id
-        "symbol": "BTC",
-        "name": "Bitcoin",
-        "current_price": 109_000.0,
-        "total_volume": 3_088_616_9744,
-        "last_updated": "2025-11-01T17:36:20.872Z"  # ISO lub datetime
-      }
-    Konflikty (ten sam coin_id+last_updated) są pomijane.
-    Zwraca liczbę wstawionych wierszy (bez pominiętych).
+    Zapis listy rekordów (takich jak zwracane przez fetch_data.py).
+    Duplikaty (coin_id, last_updated) są pomijane przez ON CONFLICT DO NOTHING.
+    Zwraca liczbę wierszy przekazanych do inserta (attempted).
     """
-    rows = list(rows)
-    if not rows:
+    buffer: List[Dict[str, Any]] = []
+    attempted = 0
+    with engine.begin() as conn:
+        for r in rows:
+            buffer.append({
+                "coin_id": r.get("id") or r.get("coin_id"),
+                "symbol": (r.get("symbol") or "").upper(),
+                "name": r.get("name") or (r.get("id") or "unknown").capitalize(),
+                "current_price": r.get("current_price"),
+                "total_volume": r.get("total_volume"),
+                "last_updated": r.get("last_updated"),  # ISO/TZ -> timestamptz
+            })
+            if len(buffer) >= batch_size:
+                conn.execute(_INSERT_SQL, buffer)
+                attempted += len(buffer)
+                buffer.clear()
+        if buffer:
+            conn.execute(_INSERT_SQL, buffer)
+            attempted += len(buffer)
+    return attempted
+
+
+def save_dataframe(df: pd.DataFrame, batch_size: int = 5000) -> int:
+    """
+    Zapis z DataFrame (kolumny: id/coin_id, symbol, name, current_price, total_volume, last_updated).
+    """
+    if df.empty:
         return 0
-
-    insert_sql = text("""
-        INSERT INTO crypto_prices
-            (coin_id, symbol, name, current_price, total_volume, last_updated)
-        VALUES
-            (:coin_id, :symbol, :name, :current_price, :total_volume, :last_updated)
-        ON CONFLICT (coin_id, last_updated) DO NOTHING
-    """)
-
-    # mapowanie pól wejściowych -> kolumny
-    payload = [{
-        "coin_id": r.get("coin_id") or r.get("id"),
-        "symbol": (r.get("symbol") or "").upper(),
-        "name": r.get("name") or (r.get("coin_id") or r.get("id") or "unknown").capitalize(),
-        "current_price": r.get("current_price"),
-        "total_volume": r.get("total_volume"),
-        "last_updated": r.get("last_updated"),  # ISO 8601 lub datetime; PG poradzi sobie
-    } for r in rows]
-
-    with engine.begin() as conn:
-        result = conn.execute(insert_sql, payload)
-        # Uwaga: przy DML executemany result.rowcount bywa -1 (nieznane) dla niektórych sterowników.
-        # Tutaj psycopg zwykle zwraca faktyczną liczbę wstawień; jeśli nie, możesz policzyć ręcznie po SELECT.
-        return result.rowcount if result.rowcount is not None else 0
+    df = df.rename(columns={"id": "coin_id"})
+    cols = ["coin_id", "symbol", "name", "current_price", "total_volume", "last_updated"]
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Brak kolumn w DataFrame: {missing}")
+    rows = df[cols].to_dict(orient="records")
+    return save_data(rows, batch_size=batch_size)
 
 
-# ------------------------ READ API (dla dashboardu) ------------------------
+# ---------------- READ API (dla dashboardu) ----------------
 
 def list_coins() -> pd.DataFrame:
-    """
-    Zwraca listę unikalnych coinów (id/symbol/name) dostępnych w tabeli.
-    """
     q = text("""
-        SELECT DISTINCT coin_id, name, symbol
+        SELECT DISTINCT coin_id, symbol, name
         FROM crypto_prices
         ORDER BY name
     """)
@@ -119,10 +158,6 @@ def list_coins() -> pd.DataFrame:
 
 
 def get_history(coin_id: str, start, end) -> pd.DataFrame:
-    """
-    Zwraca historię dla jednego coina w [start, end) (półotwarty przedział).
-    Kolumny: ts, price, volume
-    """
     q = text("""
         SELECT
             last_updated AS ts,
@@ -138,31 +173,53 @@ def get_history(coin_id: str, start, end) -> pd.DataFrame:
         return pd.read_sql(q, conn, params={"cid": coin_id, "start": start, "end": end})
 
 
-def get_history_all(start, end) -> pd.DataFrame:
-    """
-    Zwraca historię dla wszystkich coinów w [start, end).
-    Kolumny: coin_id, name, symbol, ts, price, volume
-    """
-    q = text("""
+def get_history_all(start, end, only_coins: Optional[list[str]] = None) -> pd.DataFrame:
+    base = """
         SELECT
-            coin_id, name, symbol,
+            coin_id, symbol, name,
             last_updated AS ts,
             current_price AS price,
             total_volume  AS volume
         FROM crypto_prices
         WHERE last_updated >= :start
           AND last_updated <  :end
-        ORDER BY coin_id, last_updated
-    """)
+    """
+    params: Dict[str, Any] = {"start": start, "end": end}
+    if only_coins:
+        base += " AND coin_id = ANY(:ids)"
+        params["ids"] = only_coins
+    base += " ORDER BY coin_id, last_updated"
     with engine.begin() as conn:
-        return pd.read_sql(q, conn, params={"start": start, "end": end})
+        return pd.read_sql(text(base), conn, params=params)
 
+def fix_unique_indexes() -> None:
+    """Usuwa ewentualny zły indeks (symbol, ts) i tworzy właściwy (coin_id, ts)."""
+    with engine.begin() as conn:
+        # Drop błędnego indeksu, jeśli istnieje
+        conn.execute(text("DROP INDEX IF EXISTS ux_crypto_prices_symbol_ts;"))
+        # Tworzymy właściwy unikalny indeks
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_crypto_prices_coin_ts
+            ON crypto_prices (coin_id, last_updated);
+        """))
 
-# ------------------------ TEST RĘCZNY ------------------------
+# ---------------- SMOKE TEST ----------------
 
 if __name__ == "__main__":
-    # Prosty smoke test
+    # proste uruchomienie ETL: utwórz tabelę -> dedupe -> fetch -> save
+    from etl.fetch_data import fetch_data  # dopasuj ścieżkę jeśli masz inaczej
+
     init_table()
-    print("DB connected. crypto_prices exists.")
-    df = list_coins()
-    print(f"Coins in DB: {len(df)}")
+    fix_unique_indexes()      
+    dedupe_and_enforce_unique()
+
+    print("✅ Tabela gotowa.")
+
+    data = fetch_data(days_back=365)
+    print(f"Fetched {len(data)} rows.")
+
+    n = save_data(data)
+    print(f"Inserted (attempted): {n}")
+
+    dfc = list_coins()
+    print(f"Coins in DB: {len(dfc)}")
