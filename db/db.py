@@ -2,6 +2,9 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path="etl/.env", encoding="utf-8")
 
 url = URL.create(
     drivername="postgresql+psycopg",
