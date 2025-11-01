@@ -3,5 +3,5 @@ pandas
 sqlalchemy
 streamlit
 python-dotenv
-pyodbc
+plotly
 psycopg2

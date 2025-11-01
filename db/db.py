@@ -70,3 +70,29 @@ def save_to_db(df: pd.DataFrame):
         conn.execute(text(insert_sql), records)
         print(f"[INFO] Upserted {len(records)} rows.")
         
+
+def list_coins() -> pd.DataFrame:
+    """Zwraca listę dostępnych coinów z DB (distinct)."""
+    q = text("""
+        SELECT DISTINCT coin_id, name, symbol
+        FROM crypto_prices
+        ORDER BY name
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn)
+
+def get_history(coin_id: str, start, end) -> pd.DataFrame:
+    """Historia cen/volume w zadanym oknie czasowym."""
+    q = text("""
+        SELECT
+            last_updated AS ts,
+            current_price AS price,
+            total_volume AS volume
+        FROM crypto_prices
+        WHERE coin_id = :cid
+          AND last_updated >= :start
+          AND last_updated <  :end
+        ORDER BY last_updated
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn, params={"cid": coin_id, "start": start, "end": end})
