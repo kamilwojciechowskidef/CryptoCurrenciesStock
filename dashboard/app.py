@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import sys
 sys.path.append(r"c:\Users\kamil\Desktop\CryptoCurrenciesStock")
 
+from etl.transform_data import history_postprocess,allcoins_postprocess,add_index_100,aggregate_volume
 from db.db import list_coins, get_history, get_history_all
 
 st.set_page_config("CryptoCurrencies Dashboard", layout="wide")
@@ -52,6 +53,7 @@ end_next = (datetime(y_end, m_end, 1, tzinfo=timezone.utc) + timedelta(days=32))
 recent_end = now
 recent_start = now - timedelta(days=60)
 df_one = get_history(coin_id, recent_start, recent_end)
+df_one = history_postprocess(df_one)
 
 k1, k2, k3 = st.columns(3)
 if df_one.empty:
@@ -65,9 +67,9 @@ else:
     df_one["ma30"] = df_one["price"].rolling(30, min_periods=1).mean()
 
     last_price = df_one["price"].iloc[-1]
-    ma7 = df_one["ma7"].iloc[-1]
+    ma7  = df_one["ma7"].iloc[-1]
     ma30 = df_one["ma30"].iloc[-1]
-    delta = (df_one["price"].pct_change().iloc[-1] or 0) * 100
+    delta = (df_one["ret"].iloc[-1] or 0) * 100
 
     with k1:
         st.metric("Current Price", f"${last_price:,.2f}", delta=f"{delta:.2f}%")
@@ -90,6 +92,7 @@ if not df_one.empty:
 
 st.markdown("---")
 
+
 # ---------- WYKRESY „WSZYSTKIE COINY” w zakresie rok/miesiąc ----------
 df_all = get_history_all(start_dt, end_next)
 if df_all.empty:
@@ -110,19 +113,54 @@ fig_norm = px.line(df_norm, x="ts", y="price_norm", color="name",
                    title="All coins — Price (indexed to 100 at period start)",
                    labels={"price_norm": "Index (100=start)", "ts": "Time"})
 st.plotly_chart(fig_norm, use_container_width=True)
+df_all = allcoins_postprocess(df_all)
 
 # 2) Suma wolumenu per coin (bar)
-vol = (df_all.groupby(["coin_id", "name"], as_index=False)["volume"].sum()
-       .sort_values("volume", ascending=False))
-fig_vol = px.bar(vol, x="name", y="volume", title="All coins — Total Volume in Range")
-fig_vol.update_layout(xaxis_title="Coin", yaxis_title="Volume")
-st.plotly_chart(fig_vol, use_container_width=True)
+df_line = df_all.copy()
+pts = df_line.groupby("coin_id")["ts"].count()
+df_line = df_line[df_line["coin_id"].isin(pts[pts >= 2].index)]
+if not df_line.empty:
+    df_line = add_index_100(df_line)
+    df_line["label"] = df_line["name"].fillna(df_line["coin_id"])
+    fig_norm = px.line(df_line, x="ts", y="price_norm", color="label",
+                       title="All coins — Price (indexed to 100 at period start)",
+                       labels={"price_norm":"Index (100=start)","ts":"Time","label":"Coin"})
+    st.plotly_chart(fig_norm, use_container_width=True)
+else:
+    st.info("Za mało punktów na linie indeksu w wybranym zakresie.")
 
-# 3) Korelacje zwrotów między coinami (heatmapa)
-ret = (df_all.sort_values(["coin_id", "ts"])
-             .assign(ret=lambda d: d.groupby("coin_id")["price"].pct_change()))
-pivot_ret = ret.pivot_table(index="ts", columns="name", values="ret")
-corr = pivot_ret.corr(min_periods=10)  # wymagaj trochę danych
-fig_corr = px.imshow(corr, text_auto=False, aspect="auto",
-                     title="All coins — Correlation of Returns")
-st.plotly_chart(fig_corr, use_container_width=True)
+# --- WOLUmen: stałe kolory + legenda po prawej ---
+vol = aggregate_volume(df_all)  # kolumny: coin_id, name, volume, label
+
+# paleta i mapowanie kolorów per coin (spójne, ale łatwe do rozbudowy)
+base_palette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+labels_sorted = vol["label"].tolist()
+color_map = {lab: base_palette[i % len(base_palette)] for i, lab in enumerate(labels_sorted)}
+
+fig_vol = px.bar(
+    vol,
+    x="label",
+    y="volume",
+    color="label",                     # -> legenda wg labelu
+    color_discrete_map=color_map,      # stałe kolory
+    title="All coins — Total Trading Volume in Range",
+    labels={
+        "label": "Crypto_currency",     # oś X
+        "volume": "Total Trading Volume (sum over selected period)",  # oś Y
+        "color": "Crypto_currency",
+    },
+)
+
+# formatowanie osi i etykiet
+fig_vol.update_layout(
+    legend_title_text="Crypto_currency",
+    legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),  # legenda po prawej
+    margin=dict(r=120),  # miejsce na legendę
+)
+fig_vol.update_yaxes(tickformat="~s")  # 1.2k, 3.4M itp.
+fig_vol.update_traces(hovertemplate="<b>%{x}</b><br>Volume: %{y:,}<extra></extra>")
+
+st.plotly_chart(fig_vol, use_container_width=True)
