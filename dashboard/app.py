@@ -144,23 +144,35 @@ fig_vol = px.bar(
     vol,
     x="label",
     y="volume",
-    color="label",                     # -> legenda wg labelu
-    color_discrete_map=color_map,      # stałe kolory
+    color="label",
+    color_discrete_map=color_map,
     title="All coins — Total Trading Volume in Range",
     labels={
-        "label": "Crypto_currency",     # oś X
-        "volume": "Total Trading Volume (sum over selected period)",  # oś Y
+        "label": "Crypto_currency",
+        "volume": "Total Trading Volume (sum over selected period)",
         "color": "Crypto_currency",
     },
 )
 
-# formatowanie osi i etykiet
 fig_vol.update_layout(
     legend_title_text="Crypto_currency",
-    legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),  # legenda po prawej
-    margin=dict(r=120),  # miejsce na legendę
+    legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),
+    margin=dict(r=160, t=60, b=60, l=60),
+    height=600,          # <-- zwiększamy wysokość wykresu
+    bargap=0.25,         # <-- lekki odstęp między słupkami
 )
-fig_vol.update_yaxes(tickformat="~s")  # 1.2k, 3.4M itp.
-fig_vol.update_traces(hovertemplate="<b>%{x}</b><br>Volume: %{y:,}<extra></extra>")
+
+# Jeśli chcesz, możesz włączyć skalę logarytmiczną dla lepszej widoczności małych wolumenów:
+# fig_vol.update_yaxes(type="log", title="Total Trading Volume (log scale)")
+
+fig_vol.update_yaxes(
+    tickformat="~s",
+    title="Total Trading Volume (sum over selected period)"
+)
+fig_vol.update_traces(
+    hovertemplate="<b>%{x}</b><br>Volume: %{y:,}<extra></extra>",
+    width=0.5
+)
 
 st.plotly_chart(fig_vol, use_container_width=True)
+

@@ -44,3 +44,20 @@ def aggregate_volume(df: pd.DataFrame) -> pd.DataFrame:
     vol["volume"] = vol["volume"].fillna(0)
     vol["label"] = vol["name"].fillna(vol["coin_id"])
     return vol.sort_values(by="volume", ascending=False)
+def volume_with_share(df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    Przyjmuje df_all po allcoins_postprocess (kolumny: coin_id, name, volume ...).
+    Zwraca: coin_id, name, label, volume, share (w %), posortowane malejąco.
+    """
+    vol = (df_all.groupby(["coin_id", "name"], as_index=False)["volume"]
+                 .sum(min_count=1))
+    vol["volume"] = pd.to_numeric(vol["volume"], errors="coerce").fillna(0)
+    vol["label"] = vol["name"].fillna(vol["coin_id"])
+
+    total = vol["volume"].sum()
+    if total and total > 0:
+        vol["share"] = (vol["volume"] / total) * 100.0
+    else:
+        vol["share"] = 0.0
+
+    return vol.sort_values(by="volume", ascending=False).reset_index(drop=True)
