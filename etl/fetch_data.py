@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Iterable, List, Tuple
 
@@ -11,11 +12,10 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ---------------------------- CONFIG ----------------------------
+load_dotenv("etl/.env", encoding="utf-8")
+API_KEY = os.getenv("COINGECKO_API_KEY")
+COINGECKO_BASE = "$https://api.coingecko.com/api/v3/ping?x_{API_KEY}"
 
-COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-
-# Domyślna lista coinów (dopasuj do swojego projektu)
 DEFAULT_COIN_IDS = [
     "bitcoin",
     "ethereum",
@@ -28,17 +28,16 @@ DEFAULT_COIN_IDS = [
     "wormhole",
 ]
 
-# Bezpieczny odstęp między requestami (public API)
 REQUEST_SLEEP_SEC = 1.2
 
-# Załaduj zmienne środowiskowe (m.in. COINGECKO_API_KEY)
-load_dotenv()
-
-
-# -------------------------- HELPERS -----------------------------
+# --- solidne ładowanie .env (etl/.env i ./.env) ---
+env_here = Path(__file__).with_name(".env")
+if env_here.exists():
+    load_dotenv(env_here)
+load_dotenv()  # katalog roboczy
 
 def _make_session() -> requests.Session:
-    """Requests session z retry i NAGŁÓWKAMI klucza CoinGecko."""
+    """Session z retry + wszystkimi nagłówkami CG API key (free/demo/pro)."""
     s = requests.Session()
     retries = Retry(
         total=5,
@@ -49,20 +48,17 @@ def _make_session() -> requests.Session:
     )
     s.mount("https://", HTTPAdapter(max_retries=retries))
 
-    # Pobierz klucz z dowolnej zmiennej
     api_key = (
         os.getenv("COINGECKO_API_KEY")
         or os.getenv("COINGECKO_DEMO_API_KEY")
         or os.getenv("COINGECKO_PRO_API_KEY")
     )
-
     if not api_key:
         raise RuntimeError(
-            "Brak klucza CoinGecko. Dodaj do .env np.:\n"
-            "  COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxxxxxxxxxx\n"
+            "Brak klucza CoinGecko. Dodaj do .env:\n"
+            "  COINGECKO_API_KEY=CG-xxxxxxxxxxxxxxxxxxxx\n"
         )
 
-    # Ustaw WSZYSTKIE znane nagłówki na tę samą wartość – zadziała dla demo/pro/free
     s.headers.update({
         "accept": "application/json",
         "x-cg-api-key": api_key,
@@ -71,26 +67,12 @@ def _make_session() -> requests.Session:
     })
     return s
 
-
-def _to_unix(dt: datetime) -> int:
-    """UTC datetime -> unix seconds."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return int(dt.timestamp())
-
-
 def _iso_from_ms(ms: int) -> str:
-    """ms timestamp (UTC) -> ISO 8601 z timezone 'Z'."""
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
-
 
 def _get_coins_meta(session: requests.Session, coin_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
     """
-    Stabilne pobieranie meta per-coin (symbol, name) przez /coins/{id}.
-    Unika 400 z /coins/markets?ids=... i radzi sobie z pojedynczymi błędami.
-    Zwraca: coin_id -> (SYMBOL_UPPER, name)
+    Stabilne meta per-coin przez /coins/{id}. Zwraca: coin_id -> (SYMBOL_UPPER, name)
     """
     out: Dict[str, Tuple[str, str]] = {}
     for cid in list(coin_ids):
@@ -98,11 +80,8 @@ def _get_coins_meta(session: requests.Session, coin_ids: Iterable[str]) -> Dict[
             url = f"{COINGECKO_BASE}/coins/{cid}"
             r = session.get(url, params={"localization": "false"}, timeout=25)
             if r.status_code == 401:
-                raise RuntimeError(
-                    "CoinGecko 401 Unauthorized – sprawdź COINGECKO_API_KEY w .env."
-                )
+                raise RuntimeError("CoinGecko 401 Unauthorized – sprawdź COINGECKO_API_KEY w .env.")
             if r.status_code == 404:
-                # nieznane ID – fallback
                 out[cid] = (cid[:3].upper(), cid.capitalize())
                 continue
             r.raise_for_status()
@@ -110,36 +89,65 @@ def _get_coins_meta(session: requests.Session, coin_ids: Iterable[str]) -> Dict[
             sym = (data.get("symbol") or "").upper() or cid[:3].upper()
             name = data.get("name") or cid.capitalize()
             out[cid] = (sym, name)
-        except requests.HTTPError:
-            # jakikolwiek 4xx/5xx – fallback
-            out[cid] = (cid[:3].upper(), cid.capitalize())
         except Exception:
             out[cid] = (cid[:3].upper(), cid.capitalize())
-        time.sleep(REQUEST_SLEEP_SEC * 0.6)  # delikatne ograniczenie tempa
+        time.sleep(REQUEST_SLEEP_SEC * 0.6)
     return out
 
-
-
-def _fetch_market_chart_range(
+def _fetch_market_chart_days(
     session: requests.Session,
     coin_id: str,
-    start_unix: int,
-    end_unix: int,
+    days: int = 365,
     interval: str = "daily",
 ) -> Dict:
     """
-    Pobiera dane historyczne w zadanym zakresie.
-    Zwraca json z kluczami 'prices', 'total_volumes'.
+    Stabilne pobieranie przez /coins/{id}/market_chart z fallbackami na 400:
+      1) interval=daily
+      2) bez interval
+      3) stopniowe zmniejszanie days (365 -> 360 -> 350 -> ...).
     """
-    url = f"{COINGECKO_BASE}/coins/{coin_id}/market_chart/range"
-    params = {"vs_currency": "usd", "from": start_unix, "to": end_unix, "interval": interval}
-    r = session.get(url, params=params, timeout=30)
+    days = max(1, min(int(days), 365))
 
+    def _call(d: int, with_interval: bool) -> requests.Response:
+        url = f"{COINGECKO_BASE}/coins/{coin_id}/market_chart"
+        params = {"vs_currency": "usd", "days": d}
+        if with_interval:
+            params["interval"] = interval
+        r = session.get(url, params=params, timeout=30)
+        return r
+
+    # 1) spróbuj z interval=daily
+    r = _call(days, with_interval=True)
     if r.status_code == 401:
-        raise RuntimeError(
-            "CoinGecko API zwróciło 401 Unauthorized. Dodaj klucz do .env:\n"
-            "COINGECKO_API_KEY=...\n"
-        )
+        raise RuntimeError("CoinGecko 401 Unauthorized – sprawdź COINGECKO_API_KEY w .env.")
+    if r.ok:
+        return r.json()
+
+    # 2) na 400 spróbuj bez interval
+    if r.status_code == 400:
+        time.sleep(REQUEST_SLEEP_SEC)
+        r2 = _call(days, with_interval=False)
+        if r2.ok:
+            return r2.json()
+
+        # 3) jeśli dalej 400, zmniejszaj days (bez interval, potem z interval)
+        d = days - 5
+        while d >= 30:  # nie schodź poniżej miesiąca
+            time.sleep(REQUEST_SLEEP_SEC)
+            r3 = _call(d, with_interval=False)
+            if r3.ok:
+                return r3.json()
+            # spróbuj jeszcze raz z interval=daily dla tego d
+            time.sleep(REQUEST_SLEEP_SEC)
+            r4 = _call(d, with_interval=True)
+            if r4.ok:
+                return r4.json()
+            d -= 10  # krok w dół
+
+        # jeśli nic nie zadziałało – podaj komunikat z ostatniej odpowiedzi
+        r2.raise_for_status()
+
+    # inne błędy niż 400/401
     r.raise_for_status()
     return r.json()
 
@@ -150,14 +158,9 @@ def _records_from_chart_json(
     name: str,
     chart_json: Dict,
 ) -> List[Dict]:
-    """
-    Konwertuje odpowiedź market_chart/range na listę rekordów zgodnych ze schematem:
-    coin_id/id, symbol, name, current_price, total_volume, last_updated (ISO).
-    """
     prices = chart_json.get("prices") or []
     vols = chart_json.get("total_volumes") or []
     n = min(len(prices), len(vols))
-
     out: List[Dict] = []
     for i in range(n):
         t_ms, price = prices[i]
@@ -172,27 +175,17 @@ def _records_from_chart_json(
         })
     return out
 
-
-# --------------------------- PUBLIC API --------------------------
-
 def fetch_data(
     coin_ids: Iterable[str] | None = None,
-    days_back: int = 365,
+    days_back: int = 360,
     interval: str = "daily",
 ) -> List[Dict]:
     """
-    Pobiera dane historyczne z ostatniego `days_back` dni (domyślnie 365).
-    - endpoint: /coins/{id}/market_chart/range
-    - agregacja: 'daily'
-    - zwraca listę rekordów zgodnych z pipeline'em (transform/save)
+    Pobiera historię z ostatniego `days_back` dni (max 365) przez /market_chart.
+    Zwraca listę rekordów kompatybilnych z transform/save.
     """
     if coin_ids is None:
         coin_ids = DEFAULT_COIN_IDS
-
-    now_utc = datetime.now(timezone.utc)
-    start_dt = now_utc - timedelta(days=days_back)
-    start_unix = _to_unix(start_dt)
-    end_unix = _to_unix(now_utc)
 
     sess = _make_session()
     meta = _get_coins_meta(sess, coin_ids)
@@ -202,22 +195,18 @@ def fetch_data(
     for idx, cid in enumerate(coin_ids_list, start=1):
         sym, nm = meta.get(cid, (cid[:3].upper(), cid.capitalize()))
 
-        chart = _fetch_market_chart_range(sess, cid, start_unix, end_unix, interval=interval)
+        chart = _fetch_market_chart_days(sess, cid, days=days_back, interval=interval)
         rows = _records_from_chart_json(cid, sym, nm, chart)
         all_rows.extend(rows)
 
-        # prosty throttling/progress
-        print(f"[{idx}/{len(coin_ids_list)}] {cid}: {len(rows)} dni")
+        print(f"[{idx}/{len(coin_ids_list)}] {cid}: {len(rows)} punktów")
         time.sleep(REQUEST_SLEEP_SEC)
 
     return all_rows
 
-
-# --------------------------- MANUAL RUN --------------------------
-
 if __name__ == "__main__":
     try:
-        data = fetch_data(DEFAULT_COIN_IDS, days_back=365)
+        data = fetch_data(DEFAULT_COIN_IDS, days_back=360)
         print(f"Fetched rows: {len(data)}")
         if data:
             print("Sample:", data[0])
