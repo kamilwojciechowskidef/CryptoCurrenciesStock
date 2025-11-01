@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import sys
 sys.path.append(r"c:\Users\kamil\Desktop\CryptoCurrenciesStock")
 
-from etl.transform_data import history_postprocess,allcoins_postprocess,add_index_100,aggregate_volume
+from etl.transform_data import history_postprocess,allcoins_postprocess,add_index_100,aggregate_volume,volume_with_share
 from db.db import list_coins, get_history, get_history_all
 
 st.set_page_config("CryptoCurrencies Dashboard", layout="wide")
@@ -175,4 +175,82 @@ fig_vol.update_traces(
 )
 
 st.plotly_chart(fig_vol, use_container_width=True)
+# --- Wolumen + Udział %: dwa wykresy obok siebie, wspólne kolory ---
+vol = volume_with_share(df_all)  # kolumny: label, volume, share (w %)
+
+# stałe kolory per coin (możesz nadpisać wybrane poniżej)
+base_palette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+labels_sorted = vol["label"].tolist()
+color_map = {lab: base_palette[i % len(base_palette)] for i, lab in enumerate(labels_sorted)}
+# (opcjonalnie firmowe kolory)
+color_map.update({
+    "Bitcoin":  "#F7931A",
+    "Ethereum": "#627EEA",
+    "Solana":   "#14F195",
+})
+
+c_vol, c_share = st.columns(2)
+
+# 1) Wykres wolumenów (absolutny)
+with c_vol:
+    fig_vol = px.bar(
+        vol,
+        x="label",
+        y="volume",
+        color="label",
+        color_discrete_map=color_map,
+        title="All coins — Total Trading Volume in Range",
+        labels={
+            "label": "Crypto_currency",
+            "volume": "Total Trading Volume (sum over selected period)",
+            "color": "Crypto_currency",
+        },
+    )
+    fig_vol.update_layout(
+        legend_title_text="Crypto_currency",
+        legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),
+        margin=dict(r=160, t=60, b=60, l=60),
+        height=600,
+        bargap=0.25,
+    )
+    fig_vol.update_yaxes(tickformat="~s")
+    fig_vol.update_traces(
+        hovertemplate="<b>%{x}</b><br>Volume: %{y:,}<extra></extra>",
+        width=0.5,
+    )
+    st.plotly_chart(fig_vol, use_container_width=True)
+
+# 2) Wykres udziałów procentowych
+with c_share:
+    fig_share = px.bar(
+        vol,
+        x="label",
+        y="share",
+        color="label",
+        color_discrete_map=color_map,
+        title="All coins — Share of Total Volume",
+        labels={
+            "label": "Crypto_currency",
+            "share": "Share of Total Volume (%)",
+            "color": "Crypto_currency",
+        },
+    )
+    fig_share.update_layout(
+        showlegend=False,  # legenda już jest po lewej
+        margin=dict(t=60, b=60, l=60, r=40),
+        height=600,
+        bargap=0.25,
+    )
+    fig_share.update_yaxes(range=[0, 100], ticksuffix="%", title="Share of Total Volume (%)")
+    fig_share.update_traces(
+        texttemplate="%{y:.1f}%",
+        textposition="outside",
+        cliponaxis=False,
+        hovertemplate="<b>%{x}</b><br>Share: %{y:.2f}%<extra></extra>",
+        width=0.5,
+    )
+    st.plotly_chart(fig_share, use_container_width=True)
 
