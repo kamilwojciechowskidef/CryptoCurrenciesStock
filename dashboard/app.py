@@ -2,17 +2,17 @@
 import calendar
 from datetime import datetime, timezone, timedelta
 
-import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
 import sys
 sys.path.append("C:/Users/kamil/Desktop/CryptoCurrenciesStock")
 
-# --- DB API (tylko odczyt) ---
+# --- DB API (read-only) ---
 from db.db import list_coins, get_history, get_history_all
 
-# --- Transformacje (po stronie ETL/transform_data.py) ---
+# --- Transformacje (ETL-side helpers) ---
 from etl.transform_data import (
     history_postprocess,
     allcoins_postprocess,
@@ -20,37 +20,35 @@ from etl.transform_data import (
     volume_with_share,
 )
 
-# ---------------- UI CONFIG ----------------
+# -------------- PAGE CONFIG --------------
 st.set_page_config("CryptoCurrencies Dashboard", layout="wide")
 st.title("CryptoCurrencies Dashboard")
 
-# ---------------- SELEKCJA KRYPTOWALUT ----------------
+# -------------- COIN SELECTION --------------
 coins = list_coins()
 if coins.empty:
-    st.warning("Brak danych w bazie. Uruchom ETL.")
+    st.warning("Brak danych w bazie. Najpierw uruchom ETL (backfill lub snapshot).")
     st.stop()
 
 coins["label"] = coins["name"].fillna(coins["coin_id"])
 label_to_cid = dict(zip(coins["label"], coins["coin_id"]))
 labels_all = coins["label"].tolist()
 
-sel = st.multiselect(
+selected_labels = st.multiselect(
     "Select cryptocurrencies:",
     options=["All"] + labels_all,
     default=["All"],
 )
 
-if not sel:
+if not selected_labels:
     st.stop()
 
-if "All" in sel:
+if "All" in selected_labels:
     selected_labels = labels_all
-else:
-    selected_labels = sel
 
 selected_ids = [label_to_cid[l] for l in selected_labels]
 
-# ---------------- SELEKCJA ZAKRESU: ROK/MIESIĄC ----------------
+# -------------- DATE SLICERS (year/month → year/month) --------------
 now = datetime.now(timezone.utc)
 years = list(range(2020, now.year + 1))
 months = list(range(1, 13))
@@ -65,16 +63,15 @@ with c_y2:
 with c_m2:
     m_end = st.selectbox("End month", months, index=now.month - 1)
 
+# przedział [start, end_next)
 start_dt = datetime(y_start, m_start, 1, tzinfo=timezone.utc)
-last_day = calendar.monthrange(y_end, m_end)[1]
-# górna granica otwarta: pierwszy dzień następnego miesiąca
 end_next = (datetime(y_end, m_end, 1, tzinfo=timezone.utc) + timedelta(days=32)).replace(day=1)
 
-# ---------------- KPI ----------------
-recent_start, recent_end = now - timedelta(days=60), now
+# -------------- KPI --------------
+recent_start, recent_end = now - timedelta(days=60), now  # okno do MA7/MA30
 
 if len(selected_ids) == 1:
-    # Jedna kryptowaluta → trzy metryki + wykres Price&MA
+    # 1 moneta → 3 metryki + wykres Price&MA
     cid = selected_ids[0]
     lab = selected_labels[0]
     df_one = history_postprocess(get_history(cid, recent_start, recent_end))
@@ -85,9 +82,9 @@ if len(selected_ids) == 1:
         with k2: st.metric("7-day avg", "—")
         with k3: st.metric("30-day avg", "—")
     else:
-        last_price = df_one["price"].iloc[-1]
-        ma7 = df_one["ma7"].iloc[-1]
-        ma30 = df_one["ma30"].iloc[-1]
+        last_price = float(df_one["price"].iloc[-1])
+        ma7 = float(df_one["ma7"].iloc[-1])
+        ma30 = float(df_one["ma30"].iloc[-1])
         delta = float((df_one["ret"].iloc[-1] or 0) * 100)
 
         with k1: st.metric(f"{lab} — Current Price", f"${last_price:,.2f}", delta=f"{delta:.2f}%")
@@ -108,33 +105,32 @@ if len(selected_ids) == 1:
         st.plotly_chart(fig_price, use_container_width=True)
 
 else:
-    # Wiele kryptowalut → kafelki metryk dla każdej (Current/7d/30d)
+    # wiele monet → kafelki (Current / 7d / 30d) w siatce 3 kolumn
     cols = st.columns(3)
-    col_idx = 0
+    ci = 0
     for lab, cid in zip(selected_labels, selected_ids):
         dfi = history_postprocess(get_history(cid, recent_start, recent_end))
         if dfi.empty:
-            cols[col_idx].metric(f"{lab} — Current Price", "—")
+            cols[ci].metric(f"{lab} — Current Price", "—")
         else:
-            last_price = dfi["price"].iloc[-1]
-            ma7 = dfi["ma7"].iloc[-1]
-            ma30 = dfi["ma30"].iloc[-1]
+            last_price = float(dfi["price"].iloc[-1])
+            ma7 = float(dfi["ma7"].iloc[-1])
+            ma30 = float(dfi["ma30"].iloc[-1])
             delta = float((dfi["ret"].iloc[-1] or 0) * 100)
-            cols[col_idx].metric(f"{lab}", f"${last_price:,.2f}", delta=f"{delta:.2f}%")
-            cols[col_idx].markdown(f"**7d avg:** ${ma7:,.2f}  \n**30d avg:** ${ma30:,.2f}")
-        col_idx = (col_idx + 1) % 3
+            cols[ci].metric(lab, f"${last_price:,.2f}", delta=f"{delta:.2f}%")
+            cols[ci].markdown(f"**7d avg:** ${ma7:,.2f}  \n**30d avg:** ${ma30:,.2f}")
+        ci = (ci + 1) % 3
 
 st.markdown("---")
 
-# ---------------- DANE ZBIORCZE DLA WYBRANYCH KRYPTOWALUT ----------------
+# -------------- AGGREGATED DATA (filtered by slicers & selection) --------------
 df_all = allcoins_postprocess(get_history_all(start_dt, end_next))
 df_all = df_all[df_all["coin_id"].isin(selected_ids)]
 if df_all.empty:
     st.warning("Brak danych w wybranym zakresie / dla wybranych kryptowalut.")
     st.stop()
 
-# ---------------- LINIE: INDEXED TO 100 ----------------
-# bierzemy tylko serie z ≥ 2 punktami
+# -------------- INDEXED TO 100 (only series with ≥2 points) --------------
 pts = df_all.groupby("coin_id")["ts"].count()
 df_line = df_all[df_all["coin_id"].isin(pts[pts >= 2].index)].copy()
 
@@ -146,22 +142,21 @@ if not df_line.empty:
         x="ts",
         y="price_norm",
         color="label",
-        title="Price (indexed to 100 at period start)",
+        title="All coins — Price (indexed to 100 at period start)",
         labels={"price_norm": "Index (100=start)", "ts": "Time", "label": "Crypto_currency"},
     )
     st.plotly_chart(fig_norm, use_container_width=True)
 else:
     st.info("Za mało punktów na linie indeksu w wybranym zakresie.")
 
-# ---------------- WOLUMEN + UDZIAŁ PROCENTOWY ----------------
-vol = volume_with_share(df_all)  # kolumny: label, volume, share
+# -------------- VOLUME & SHARE (two charts side by side) --------------
+vol = volume_with_share(df_all)  # label, volume, share
 
-# stałe kolory per coin
+# stałe kolory per coin (możesz dodać kolejne)
 base_palette = ["#F7931A", "#627EEA", "#14F195", "#d62728", "#9467bd",
                 "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
 labels_sorted = vol["label"].tolist()
 color_map = {lab: base_palette[i % len(base_palette)] for i, lab in enumerate(labels_sorted)}
-# opcjonalnie doprecyzowanie „firmowych”
 color_map.update({"Bitcoin": "#F7931A", "Ethereum": "#627EEA", "Solana": "#14F195"})
 
 c_vol, c_share = st.columns(2)
@@ -173,7 +168,7 @@ with c_vol:
         y="volume",
         color="label",
         color_discrete_map=color_map,
-        title="Total Trading Volume in Range",
+        title="All coins — Total Trading Volume in Range",
         labels={
             "label": "Crypto_currency",
             "volume": "Total Trading Volume (sum over selected period)",
@@ -201,7 +196,7 @@ with c_share:
         y="share",
         color="label",
         color_discrete_map=color_map,
-        title="Share of Total Volume",
+        title="All coins — Share of Total Volume",
         labels={
             "label": "Crypto_currency",
             "share": "Share of Total Volume (%)",
@@ -224,7 +219,7 @@ with c_share:
     )
     st.plotly_chart(fig_share, use_container_width=True)
 
-# ---------------- KORELACJE ZWROTÓW ----------------
+# -------------- CORRELATION HEATMAP (only if enough points) --------------
 df_corr = df_all.copy()
 pts = df_corr.groupby("coin_id")["ts"].count()
 df_corr = df_corr[df_corr["coin_id"].isin(pts[pts >= 3].index)]
@@ -242,7 +237,7 @@ if not df_corr.empty:
             corr,
             text_auto=False,
             aspect="auto",
-            title="Correlation of Returns",
+            title="All coins — Correlation of Returns",
         )
         st.plotly_chart(fig_corr, use_container_width=True)
     else:
