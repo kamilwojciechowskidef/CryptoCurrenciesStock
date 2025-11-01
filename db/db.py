@@ -96,3 +96,19 @@ def get_history(coin_id: str, start, end) -> pd.DataFrame:
     """)
     with engine.begin() as conn:
         return pd.read_sql(q, conn, params={"cid": coin_id, "start": start, "end": end})
+    
+def get_history_all(start, end) -> pd.DataFrame:
+    """Wszystkie coiny w oknie czasowym (ts/price/volume + identyfikatory)."""
+    q = text("""
+        SELECT
+            coin_id, name, symbol,
+            last_updated AS ts,
+            current_price AS price,
+            total_volume AS volume
+        FROM crypto_prices
+        WHERE last_updated >= :start
+          AND last_updated <  :end
+        ORDER BY coin_id, last_updated
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn, params={"start": start, "end": end})
