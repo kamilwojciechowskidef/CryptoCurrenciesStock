@@ -50,7 +50,7 @@ selected_ids = [label_to_cid[l] for l in selected_labels]
 
 # -------------- DATE SLICERS (year/month → year/month) --------------
 now = datetime.now(timezone.utc)
-years = list(range(2020, now.year + 1))
+years = list(range(now.year-1, now.year + 1))
 months = list(range(1, 13))
 
 c_y1, c_m1, c_y2, c_m2 = st.columns(4)
