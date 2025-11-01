@@ -1,15 +1,23 @@
-# db.py
 import os
 from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
-from pathlib import Path
+from sqlalchemy.engine import URL
+import pandas as pd
 
-# pewne ładowanie .env (jak w app.py)
-env_path = Path(__file__).resolve().parents[1] / ".env"
-load_dotenv(dotenv_path=env_path)
+url = URL.create(
+    drivername="postgresql+psycopg",
+    username=os.getenv("POSTGRES_USER"),
+    password=os.getenv("POSTGRES_PASSWORD"),
+    host=os.getenv("POSTGRES_HOST"),
+    port=int(os.getenv("POSTGRES_PORT")),
+    database=os.getenv("POSTGRES_DB"),
+)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# kontrolnie – sprawdź typ i ewentualne nie-ASCII (powinno być pusto)
+dsn = str(url)
+print("TYPE:", type(dsn).__name__)
+print("NON-ASCII:", [(i, ch, hex(ord(ch))) for i, ch in enumerate(dsn) if ord(ch) > 127])
+
+engine = create_engine(url, pool_pre_ping=True, future=True)
 
 def init_table():
     create_table_query = """
@@ -33,6 +41,29 @@ def init_table():
         conn.execute(text(create_table_query))
         print("[INFO] Table checked/created.")
 
-def save_to_db(df):
-    df.to_sql("crypto_prices", engine, if_exists="append", index=False)
-    print("[INFO] Data saved to PostgreSQL.")
+def save_to_db(df: pd.DataFrame):
+    # UPSERT po (symbol, last_updated)
+    records = df.to_dict(orient="records")
+    if not records:
+        print("[INFO] Nothing to save.")
+        return
+
+    cols = [
+        "coin_id","symbol","name","current_price","market_cap","total_volume",
+        "high_24h","low_24h","price_change_percentage_24h","last_updated"
+    ]
+
+    with engine.begin() as conn:
+        # budujemy insert przez tekstowy SQL z ON CONFLICT DO NOTHING (prosty i szybki)
+        insert_sql = """
+        INSERT INTO crypto_prices
+        (coin_id, symbol, name, current_price, market_cap, total_volume,
+         high_24h, low_24h, price_change_percentage_24h, last_updated)
+        VALUES
+        (:coin_id, :symbol, :name, :current_price, :market_cap, :total_volume,
+         :high_24h, :low_24h, :price_change_percentage_24h, :last_updated)
+        ON CONFLICT (symbol, last_updated) DO NOTHING;
+        """
+        conn.execute(text(insert_sql), records)
+        print(f"[INFO] Upserted {len(records)} rows.")
+        

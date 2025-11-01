@@ -3,4 +3,5 @@ pandas
 sqlalchemy
 streamlit
 python-dotenv
-psycopg2-binary
+pyodbc
+psycopg2

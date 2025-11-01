@@ -1,0 +1,15 @@
+{
+    "editor.defaultFormatter": "ms-python.vscode-pylance",
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "Postgres",
+            "database": "cryptoetl",
+            "username": "postgres"
+        }
+    ]
+}
