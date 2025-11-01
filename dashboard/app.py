@@ -301,6 +301,102 @@ if rets.shape[0] >= 5 and rets.shape[1] >= 2:
 else:
     st.caption("Not enough data points to calculate correlations.")
 
+# ==============================
+# 1️⃣ Cumulative Returns
+# ==============================
+st.subheader("Cumulative Returns — Performance Comparison")
+
+# Oblicz dzienne zwroty i skumulowany zwrot
+returns = hist_all.pivot(index="ts", columns="coin_id", values="price").pct_change()
+cum_returns = (1 + returns).cumprod() - 1
+cum_returns = cum_returns.reset_index().melt(id_vars="ts", var_name="coin_id", value_name="cum_return")
+
+fig_cum = px.line(
+    cum_returns,
+    x="ts",
+    y="cum_return",
+    color="coin_id",
+    title="Cumulative Returns Over Time",
+    labels={"cum_return": "Cumulative Return", "ts": "Date", "coin": "Cryptocurrency"},
+)
+
+fig_cum.update_layout(
+    height=500,
+    margin=dict(l=20, r=20, t=40, b=40),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_cum, use_container_width=True, key="cumulative_returns")
+
+# ==============================
+# 2️⃣ Risk–Return Scatter
+# ==============================
+st.subheader("Risk vs Return — Volatility Analysis")
+
+# policz średni zwrot i odchylenie standardowe
+risk_return = (
+    returns.agg(["mean", "std"])
+    .T.reset_index()
+    .rename(columns={"index": "coin_id", "mean": "avg_return", "std": "volatility"})
+)
+
+fig_risk = px.scatter(
+    risk_return,
+    x="volatility",
+    y="avg_return",
+    color="coin_id",
+    size="volatility",
+    hover_name="coin_id",
+    title="Average Daily Return vs Volatility",
+    labels={
+        "volatility": "Volatility (Risk)",
+        "avg_return": "Average Return",
+        "coin_id": "Cryptocurrency",
+    },
+    trendline="ols",
+)
+
+fig_risk.update_traces(marker=dict(opacity=0.8, line=dict(width=1, color="white")))
+fig_risk.update_layout(
+    height=500,
+    margin=dict(l=20, r=20, t=40, b=40),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_risk, use_container_width=True, key="risk_return")
+
+# ==============================
+# 3️⃣ Market Share Evolution
+# ==============================
+# ==============================
+# 3️⃣ Market Share Evolution (wolumen jako proxy)
+# ==============================
+st.subheader("Market Share — Evolution Over Time")
+
+# Użyj wolumenu zamiast kapitalizacji rynkowej (jeśli brak kolumny 'market_cap')
+market_share = hist_all.copy()
+market_share["share"] = market_share["volume"] / market_share.groupby("ts")["volume"].transform("sum")
+
+
+fig_share_evo = px.area(
+    market_share,
+    x="ts",
+    y="share",
+    color="coin_id",
+    title="Market Share Evolution",
+    labels={"share": "Market Share (%)", "ts": "Date", "coin_id": "Cryptocurrency"},
+    groupnorm="fraction",
+)
+
+fig_share_evo.update_layout(
+    height=500,
+    margin=dict(l=20, r=20, t=40, b=40),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_share_evo, use_container_width=True, key="market_share_evo")
+
+
 # =========================
 #  Footer
 # =========================
