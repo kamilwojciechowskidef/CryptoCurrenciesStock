@@ -2,6 +2,9 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path="etl/.env", encoding="utf-8")
 
 url = URL.create(
     drivername="postgresql+psycopg",
@@ -67,3 +70,45 @@ def save_to_db(df: pd.DataFrame):
         conn.execute(text(insert_sql), records)
         print(f"[INFO] Upserted {len(records)} rows.")
         
+
+def list_coins() -> pd.DataFrame:
+    """Zwraca listę dostępnych coinów z DB (distinct)."""
+    q = text("""
+        SELECT DISTINCT coin_id, name, symbol
+        FROM crypto_prices
+        ORDER BY name
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn)
+
+def get_history(coin_id: str, start, end) -> pd.DataFrame:
+    """Historia cen/volume w zadanym oknie czasowym."""
+    q = text("""
+        SELECT
+            last_updated AS ts,
+            current_price AS price,
+            total_volume AS volume
+        FROM crypto_prices
+        WHERE coin_id = :cid
+          AND last_updated >= :start
+          AND last_updated <  :end
+        ORDER BY last_updated
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn, params={"cid": coin_id, "start": start, "end": end})
+    
+def get_history_all(start, end) -> pd.DataFrame:
+    """Wszystkie coiny w oknie czasowym (ts/price/volume + identyfikatory)."""
+    q = text("""
+        SELECT
+            coin_id, name, symbol,
+            last_updated AS ts,
+            current_price AS price,
+            total_volume AS volume
+        FROM crypto_prices
+        WHERE last_updated >= :start
+          AND last_updated <  :end
+        ORDER BY coin_id, last_updated
+    """)
+    with engine.begin() as conn:
+        return pd.read_sql(q, conn, params={"start": start, "end": end})
