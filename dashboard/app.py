@@ -102,17 +102,18 @@ id_to_name = dict(zip(coins_df["coin_id"], coins_df["name"]))
 
 # ---- filtry ----
 col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 1, 1, 1, 1])
-
+now = datetime.now(timezone.utc)
+one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
     selection = st.multiselect(
-        "Select cryptocurrencies",
+        f"Select cryptocurrency data from {one_year_ago} to {now.date()}",
         ["All"] + all_names,
         default=["All"],
         help="Możesz wybrać jedną, kilka lub All.",
     )
 
-now = datetime.now(timezone.utc)
-years = list(range(2020, now.year + 1))
+
+years = list(range(now.year - 1, now.year + 1))
 
 with col_f2:
     start_year = st.selectbox("Start year", years, index=max(0, years.index(now.year) - 1))
@@ -143,7 +144,7 @@ hist_all = ensure_ts_utc(cached_get_history_all(start_dt, end_dt))
 hist_all = hist_all[hist_all["coin_id"].isin(selected_ids)].copy()
 
 if hist_all.empty:
-    st.info("Brak danych w wybranym zakresie.")
+    st.info("No data available in the selected range.")
     st.stop()
 
 # =========================
@@ -154,7 +155,7 @@ if len(selected_ids) == 1:
     cid = selected_ids[0]
     single = ensure_ts_utc(cached_get_history(cid, start_dt, end_dt))
     if single.empty:
-        st.info("Brak danych dla wybranej monety.")
+        st.info("No data available for the selected coin.")
     else:
         single = add_mas(single.rename(columns={"ts": "ts", "price": "price"}), "price", windows=(7, 30))
         latest = single.sort_values("ts").iloc[-1]
