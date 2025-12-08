@@ -12,5 +12,3 @@ CREATE TABLE crypto_prices (
   price_change_percentage_24h NUMERIC,
   last_updated TIMESTAMP
 );
-CREATE UNIQUE INDEX ux_crypto_prices_symbol_ts
-  ON crypto_prices(symbol, last_updated);

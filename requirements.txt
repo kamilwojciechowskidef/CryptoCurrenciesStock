@@ -4,4 +4,4 @@ sqlalchemy
 streamlit
 python-dotenv
 plotly
-psycopg2-binary
+psycopg2
