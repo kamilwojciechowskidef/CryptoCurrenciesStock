@@ -80,7 +80,7 @@ def fetch_data(coin_ids=None, days_back=365):
                 "low_24h": low_24h,
                 "price_change_percentage_24h": change_24h,
 
-                "last_updated": ts_iso
+                "date_": ts_iso
             })
             print(f"[{idx}/{len(coin_ids)}] ✅ {coin}: {n} punktów")
             time.sleep(1.2)  # ograniczenie zapytań (API limit)

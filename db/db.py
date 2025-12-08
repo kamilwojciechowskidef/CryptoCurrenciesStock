@@ -53,13 +53,12 @@ def list_coins():
 def get_history(coin_id: str, start, end):
     url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
 
-    params = [
-        ("select", "coin_id,name,current_price,total_volume,last_updated"),
-        ("coin_id", f"eq.{coin_id}"),
-        ("last_updated", f"gte.{start.isoformat()}"),
-        ("last_updated", f"lte.{end.isoformat()}"),
-        ("order", "last_updated.asc")
-    ]
+    params = {
+        "select": "coin_id,name,current_price,total_volume,date_",
+        "coin_id": f"eq.{coin_id}",
+        "and": f"(date_.gte.{start.isoformat()},date_.lte.{end.isoformat()})",
+        "order": "date_.asc"
+    }
 
     res = requests.get(url, headers=HEADERS, params=params)
     res.raise_for_status()
@@ -68,12 +67,12 @@ def get_history(coin_id: str, start, end):
     if df.empty:
         return df
 
-    df = df.rename(columns={
+    return df.rename(columns={
         "current_price": "price",
         "total_volume": "volume",
-        "last_updated": "ts"
+        "date_": "ts"
     })
-    return df
+
 
 
 
@@ -83,12 +82,11 @@ def get_history(coin_id: str, start, end):
 def get_history_all(start, end):
     url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
 
-    params = [
-        ("select", "coin_id,name,current_price,total_volume,last_updated"),
-        ("last_updated", f"gte.{start.isoformat()}"),
-        ("last_updated", f"lte.{end.isoformat()}"),
-        ("order", "last_updated.asc")
-    ]
+    params = {
+        "select": "coin_id,name,current_price,total_volume,date_",
+        "and": f"(date_.gte.{start.isoformat()},date_.lte.{end.isoformat()})",
+        "order": "date_.asc"
+    }
 
     res = requests.get(url, headers=HEADERS, params=params)
     res.raise_for_status()
@@ -97,12 +95,12 @@ def get_history_all(start, end):
     if df.empty:
         return df
 
-    df = df.rename(columns={
+    return df.rename(columns={
         "current_price": "price",
         "total_volume": "volume",
-        "last_updated": "ts"
+        "date_": "ts"
     })
-    return df
+
 
 
 
