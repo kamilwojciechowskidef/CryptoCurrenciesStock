@@ -105,33 +105,19 @@ col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 1, 1, 1, 1])
 now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
-
-    options = ["Select all"] + all_names
-
-    # inicjalizacja stanu tylko raz
-    if "selection" not in st.session_state:
-        st.session_state.selection = all_names.copy()
-
-    # multiselect korzysta z session_state, ale NIE ustawiamy mu default=
     selection = st.multiselect(
         f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
-        options,
-        st.session_state.selection,   # <- to NIE jest "default", tylko current value
-        help="Wybierz jedną, kilka lub użyj opcji Select all.",
-        key="selection_widget"
+        all_names,
+        help="Możesz wybrać jedną lub kilka kryptowalut. Gdy nic nie wybierzesz — pokażemy wszystkie."
     )
 
-    # logika Select all
-    if "Select all" in selection:
-        st.session_state.selection = all_names.copy()
-        st.session_state.selection_widget = all_names.copy()
-        st.rerun()
-    else:
-        # normalna logika — po prostu zapisujemy wybór użytkownika
-        st.session_state.selection = [opt for opt in selection if opt != "Select all"]
+# jeśli nic nie wybrano → traktujemy jak „all”
+if not selection or len(selection) == 0:
+    selected_names = all_names
+else:
+    selected_names = selection
 
-    # wynik do dalszej części kodu
-    selection = st.session_state.selection
+selected_ids = [name_to_id[n] for n in selected_names]
 
 
 
