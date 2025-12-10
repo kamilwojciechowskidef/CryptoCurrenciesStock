@@ -119,8 +119,6 @@ else:
 
 selected_ids = [name_to_id[n] for n in selected_names]
 
-years = list(range(now.year - 1, now.year + 1))
-
 # ---- wybór dat (od-do) ----
 col_d1, col_d2 = st.columns([1, 1])
 
@@ -144,23 +142,13 @@ with col_d2:
 
 # konwersja na datetime z UTC
 start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
-end_dt   = datetime.combine(end_date,   datetime.min.time(), tzinfo=timezone.utc)
+end_dt   = datetime.combine(end_date,   datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
 
-# dodaj 1 dzień, by zakres był [start_dt, end_dt)
-end_dt = end_dt + timedelta(days=1)
-
-# walidacja
+# walidacja dat
 if end_dt <= start_dt:
     st.warning("Zakres dat jest pusty. Wybierz poprawny przedział.")
     st.stop()
 
-
-start_dt = first_day(start_year, start_month)
-end_dt = last_month_start(end_year, end_month)  # [start_dt, end_dt)
-
-if end_dt <= start_dt:
-    st.warning("Zakres dat jest pusty. Upewnij się, że (rok,miesiąc) końcowy > (rok,miesiąc) początkowy.")
-    st.stop()
 
 # wybór monet
 selected_names = all_names if "All" in selection or len(selection) == 0 else selection
