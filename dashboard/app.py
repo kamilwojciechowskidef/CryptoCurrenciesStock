@@ -374,7 +374,7 @@ st.caption(
 # Oblicz dzienne zwroty i skumulowany zwrot
 returns = hist_all.pivot(index="ts", columns="coin_id", values="price").pct_change()
 cum_returns = (1 + returns).cumprod() - 1
-cum_returns = cum_returns.reset_index().melt(id_vars="ts", var_name="Kryptowaluty", value_name="cum_return")
+cum_returns = cum_returns.reset_index().melt(id_vars="ts", var_name="coin_id", value_name="cum_return").copy()
 
 fig_cum = px.line(
     cum_returns,
