@@ -106,7 +106,7 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
     selection = st.multiselect(
-        f"Select cryptocurrency data from {one_year_ago} to {now.date()}",
+        f"Wybierz kryptowalute {one_year_ago} to {now.date()}",
         ["All"] + all_names,
         default=["All"],
         help="Możesz wybrać jedną, kilka lub All.",
@@ -144,7 +144,7 @@ hist_all = ensure_ts_utc(cached_get_history_all(start_dt, end_dt))
 hist_all = hist_all[hist_all["coin_id"].isin(selected_ids)].copy()
 
 if hist_all.empty:
-    st.info("No data available in the selected range.")
+    st.info("Brak danych w zaznaczonym zakresie.")
     st.stop()
 
 # =========================
@@ -155,7 +155,7 @@ if len(selected_ids) == 1:
     cid = selected_ids[0]
     single = ensure_ts_utc(cached_get_history(cid, start_dt, end_dt))
     if single.empty:
-        st.info("No data available for the selected coin.")
+        st.info("Brak danych dla wybranej kryptowaluty.")
     else:
         single = add_mas(single.rename(columns={"ts": "ts", "price": "price"}), "price", windows=(7, 30))
         latest = single.sort_values("ts").iloc[-1]
@@ -163,9 +163,16 @@ if len(selected_ids) == 1:
         with k1:
             st.metric(label=f"{id_to_name[cid]} — Current Price", value=f"${latest['price']:,.2f}")
         with k2:
-            st.metric(label="7-day avg", value=f"${single['MA7'].iloc[-1]:,.2f}")
+            st.metric(label="Śrtednia 7 dni", value=f"${single['MA7'].iloc[-1]:,.2f}")
         with k3:
-            st.metric(label="30-day avg", value=f"${single['MA30'].iloc[-1]:,.2f}")
+            st.metric(label="Śrtednia 30 dni", value=f"${single['MA30'].iloc[-1]:,.2f}")
+        st.caption(
+            "Te trzy wskaźniki pokazują aktualną cenę kryptowaluty oraz jej średnią "
+            "cenę z ostatnich 7 i 30 dni. To szybki sposób na ocenę, czy obecna wartość "
+            "jest powyżej czy poniżej ostatnich trendów. Jeśli aktualna cena przekracza "
+            "średnie kroczące, moneta zwykle znajduje się w fazie wzrostowej — jeśli jest "
+            "niżej, może sygnalizować lokalną słabość rynku."
+        )
 
         # Price + MA
         fig = go.Figure()
@@ -178,8 +185,8 @@ if len(selected_ids) == 1:
         fig.add_trace(go.Scatter(x=single["ts"], y=single["MA30"], mode="lines", name="MA 30",
                                  line=dict(width=1.5, dash="dot")))
         fig.update_layout(
-            title=f"{id_to_name[cid]} — Price & Moving Averages",
-            xaxis_title="Time", yaxis_title="Price",
+            title=f"{id_to_name[cid]} — Cena i Średnie 7 i 30 dni",
+            xaxis_title="Czas", yaxis_title="Cena",
             height=380, margin=dict(l=20, r=20, t=60, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
@@ -227,8 +234,14 @@ else:
 # =========================
 st.markdown("---")
 
+st.caption(
+    "Wykres pokazuje, jak zmieniały się ceny poszczególnych kryptowalut względem "
+    "ich wartości początkowej w wybranym okresie. Każda moneta startuje z poziomu 100, "
+    "co pozwala łatwo porównać tempo wzrostu lub spadków między projektami, niezależnie od ich ceny."
+)
+
 # 1) Indeks 100 na starcie okresu
-st.subheader("Price (indexed to 100 at period start)")
+st.subheader("Cena (indeksowana do 100 w okresie rozpoczęcia)")
 norm = index_to_100(hist_all.rename(columns={"price": "price"}), price_col="price", group_col="coin_id")
 norm["name"] = norm["coin_id"].map(id_to_name)
 
@@ -242,8 +255,14 @@ fig_norm.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xa
                        margin=dict(l=20, r=20, t=60, b=20))
 st.plotly_chart(fig_norm, use_container_width=True, key="indexed_prices")
 
+
+
 # 2) Łączny wolumen (słupki)
-st.subheader("Total Trading Volume in Range")
+st.subheader("Łączny wolumen w zakresie")
+st.caption(
+    "Suma całkowitego wolumenu handlu dla każdej kryptowaluty w wybranym okresie. "
+    "Wysoki wolumen zwykle oznacza dużą aktywność inwestorów oraz lepszą płynność rynku."
+)
 vol = (hist_all.groupby("coin_id", as_index=False)["volume"].sum()
        .assign(name=lambda d: d["coin_id"].map(id_to_name)))
 vol = vol.sort_values("volume", ascending=False)
@@ -251,7 +270,7 @@ vol = vol.sort_values("volume", ascending=False)
 fig_bar = px.bar(
     vol, x="name", y="volume", color="name",
     color_discrete_map=color_map,
-    labels={"name": "Crypto_currency", "volume": "Total trading volume (sum in selected period)"},
+    labels={"name": "Kryptowaluty", "volume": "Łączny wolumen (suma w zaznaczonym okresie)"},
     height=420,
 )
 fig_bar.update_layout(showlegend=True,
@@ -259,15 +278,21 @@ fig_bar.update_layout(showlegend=True,
                       margin=dict(l=20, r=20, t=40, b=20))
 st.plotly_chart(fig_bar, use_container_width=True, key="total_volume")
 
+
+
 # 3) Udział w wolumenie (%)
-st.subheader("Share of Total Volume")
+st.subheader("Udział w wolumenie (%)")
+st.caption(
+    "Udział danej kryptowaluty w całkowitym wolumenie transakcji. "
+    "Pokazuje, które projekty dominowały w handlu oraz jak wygląda ich względna popularność."
+)
 total_vol = vol["volume"].sum()
 vol["share"] = np.where(total_vol > 0, vol["volume"] / total_vol * 100.0, np.nan)
 
 fig_share = px.bar(
     vol, x="name", y="share", color="name",
     color_discrete_map=color_map,
-    labels={"name": "Crypto_currency", "share": "Share of volume, %"},
+    labels={"name": "Kryptowaluty", "share": "Udział w wolumenie, %"},
     height=420,
 )
 fig_share.update_layout(showlegend=True,
@@ -275,8 +300,16 @@ fig_share.update_layout(showlegend=True,
                         margin=dict(l=20, r=20, t=40, b=20))
 st.plotly_chart(fig_share, use_container_width=True, key="share_volume")
 
+
+
 # 4) Heatmapa korelacji (dzienne stopy zwrotu)
-st.subheader("Correlation of daily returns")
+st.subheader("Korelacja dziennych zwrotów")
+st.caption(
+    "Mapa korelacji dziennych stóp zwrotu między kryptowalutami. "
+    "Wartości bliskie 1 oznaczają, że monety poruszają się podobnie, "
+    "a wartości ujemne sugerują przeciwny kierunek zmian. To przydatne narzędzie "
+    "do oceny dywersyfikacji portfela."
+)
 pivot = hist_all.pivot_table(index="ts", columns="coin_id", values="price").copy()
 
 # index → datetime UTC (bez błędów dla datetime64[ns, UTC])
@@ -299,12 +332,19 @@ if rets.shape[0] >= 5 and rets.shape[1] >= 2:
     fig_corr.update_layout(height=500, margin=dict(l=20, r=20, t=40, b=20))
     st.plotly_chart(fig_corr, use_container_width=True, key="correlation")
 else:
-    st.caption("Not enough data points to calculate correlations.")
+    st.caption("Brak danych dla obliczenia korelacji")
+
 
 # ==============================
 # 1️⃣ Cumulative Returns
 # ==============================
-st.subheader("Cumulative Returns — Performance Comparison")
+st.subheader("Kumulowane zwroty")
+st.caption(
+    "Skumulowane stopy zwrotu pokazują, jaki procent zysku lub straty wygenerowałaby "
+    "inwestycja w daną kryptowalutę na początku wybranego okresu. Idealne do porównania "
+    "długoterminowej efektywności projektów."
+)
+
 
 # Oblicz dzienne zwroty i skumulowany zwrot
 returns = hist_all.pivot(index="ts", columns="coin_id", values="price").pct_change()
@@ -317,7 +357,7 @@ fig_cum = px.line(
     y="cum_return",
     color="coin_id",
     title="Cumulative Returns Over Time",
-    labels={"cum_return": "Cumulative Return", "ts": "Date", "coin": "Cryptocurrency"},
+    labels={"cum_return": "Kumulowany zwrot", "ts": "Data", "coin": "Kryptowaluta"},
 )
 
 fig_cum.update_layout(
@@ -331,7 +371,7 @@ st.plotly_chart(fig_cum, use_container_width=True, key="cumulative_returns")
 # ==============================
 # 2️⃣ Risk–Return Scatter
 # ==============================
-st.subheader("Risk vs Return — Volatility Analysis")
+st.subheader("Ryzyko vs Zwrot")
 
 # policz średni zwrot i odchylenie standardowe
 risk_return = (
@@ -347,11 +387,11 @@ fig_risk = px.scatter(
     color="coin_id",
     size="volatility",
     hover_name="coin_id",
-    title="Average Daily Return vs Volatility",
+    title="Średni dzienny zwrot vs ryzyko",
     labels={
-        "volatility": "Volatility (Risk)",
-        "avg_return": "Average Return",
-        "coin_id": "Cryptocurrency",
+        "volatility": "Ryzyko",
+        "avg_return": "Średni dzienny zwrot",
+        "coin_id": "Kryptowaluta",
     },
     trendline="ols",
 )
@@ -371,7 +411,13 @@ st.plotly_chart(fig_risk, use_container_width=True, key="risk_return")
 # ==============================
 # 3️⃣ Market Share Evolution (wolumen jako proxy)
 # ==============================
-st.subheader("Market Share — Evolution Over Time")
+st.subheader("Ewolucja udziału w rynku")
+st.caption(
+    "Zmiany udziału rynkowego kryptowalut w czasie, mierzone udziałem w wolumenie transakcji. "
+    "Rosnący udział sugeruje zwiększone zainteresowanie inwestorów, a spadający – osłabienie "
+    "aktywności handlowej danego projektu."
+)
+
 
 # Użyj wolumenu zamiast kapitalizacji rynkowej (jeśli brak kolumny 'market_cap')
 market_share = hist_all.copy()
@@ -383,8 +429,8 @@ fig_share_evo = px.area(
     x="ts",
     y="share",
     color="coin_id",
-    title="Market Share Evolution",
-    labels={"share": "Market Share (%)", "ts": "Date", "coin_id": "Cryptocurrency"},
+    title="Evolucja udziału w rynku",
+    labels={"share": "Udział w rynku (%)", "ts": "Data", "coin_id": "Kryptowaluta"},
     groupnorm="fraction",
 )
 
@@ -402,8 +448,8 @@ st.plotly_chart(fig_share_evo, use_container_width=True, key="market_share_evo")
 # =========================
 st.markdown("---")
 st.caption(
-    "This dashboard provides an overview of cryptocurrency performance. "
-    "Use the year/month filters to define the analysis period, and select one or multiple coins to compare. "
-    "Choosing a single cryptocurrency will display detailed metrics, including price trends and 7/30-day moving averages."
+    "Ten dashboard zawiera podsumowanie wydajności kryptowalut. "
+    "Użyj filtrów roku/miesiąca, aby zdefiniować okres analizy i wybierz jedną lub więcej kryptowalut. "
+    "Wybieranie jednej kryptowaluty pokaże szczegółowe metryki, w tym cenę i średnie 7 i 30 dni."
 )
 
