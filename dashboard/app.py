@@ -100,6 +100,8 @@ all_names = coins_df["name"].tolist()
 name_to_id = dict(zip(coins_df["name"], coins_df["coin_id"]))
 id_to_name = dict(zip(coins_df["coin_id"], coins_df["name"]))
 
+now = datetime.now(timezone.utc)
+
 # -----------------------------------------------------------
 # 🔍 FILTRY: Wybór kryptowalut + dynamiczny zakres dat z bazy
 # -----------------------------------------------------------
