@@ -3,8 +3,6 @@ import time
 import requests
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-import sys
-sys.path.append("c:/Users/kamil/Desktop/CryptoCurrenciesStock")
 from db.db import insert_data
 
 # === Wczytaj konfigurację ===

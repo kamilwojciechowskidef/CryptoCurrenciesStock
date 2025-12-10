@@ -1,5 +1,3 @@
-import sys
-sys.path.append("c:/Users/kamil/Desktop/CryptoCurrenciesStock")
 from db.db import list_coins, get_history_all
 from datetime import datetime, timezone, timedelta
 
