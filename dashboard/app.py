@@ -106,11 +106,16 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
     selection = st.multiselect(
-        f"Wybierz kryptowalute i zakres dat  od {one_year_ago} do {now.date()}",
+        f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
         ["All"] + all_names,
         default=["All"],
-        help="Możesz wybrać jedną, kilka lub All.",
+        help="Możesz wybrać jedną, kilka lub All."
     )
+
+    # --- logika poprawnego działania 'All' ---
+    if "All" in selection and len(selection) > 1:
+        selection = ["All"]
+
 
 
 years = list(range(now.year - 1, now.year + 1))
