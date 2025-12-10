@@ -100,25 +100,6 @@ all_names = coins_df["name"].tolist()
 name_to_id = dict(zip(coins_df["name"], coins_df["coin_id"]))
 id_to_name = dict(zip(coins_df["coin_id"], coins_df["name"]))
 
-# ---- filtry ----
-col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 1, 1, 1, 1])
-now = datetime.now(timezone.utc)
-one_year_ago = (datetime.now() - timedelta(days=365)).date()
-with col_f1:
-    selection = st.multiselect(
-        f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
-        all_names,
-        help="Możesz wybrać jedną lub kilka kryptowalut. Gdy nic nie wybierzesz — pokażemy wszystkie."
-    )
-
-# jeśli nic nie wybrano → traktujemy jak „all”
-if not selection or len(selection) == 0:
-    selected_names = all_names
-else:
-    selected_names = selection
-
-selected_ids = [name_to_id[n] for n in selected_names]
-
 # -----------------------------------------------------------
 # 🔍 FILTRY: Wybór kryptowalut + dynamiczny zakres dat z bazy
 # -----------------------------------------------------------
