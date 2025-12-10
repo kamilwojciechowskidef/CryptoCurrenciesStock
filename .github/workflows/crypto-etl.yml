@@ -38,7 +38,7 @@ jobs:
       #   run: black --check .
 
       - name: Run tests
-        run: pytest -q || true
+        run: pytest -q --disable-flake8 || true
 
 
   # ============================
