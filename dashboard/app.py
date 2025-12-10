@@ -105,16 +105,27 @@ col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([2, 1, 1, 1, 1])
 now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
+
+    # --- inicjalizacja stanu (tylko raz) ---
+    if "selection" not in st.session_state:
+        st.session_state.selection = ["All"]
+
+    # --- komponent multiselect ---
     selection = st.multiselect(
         f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
         ["All"] + all_names,
-        default=["All"],
+        default=st.session_state.selection,
+        key="selection",
         help="Możesz wybrać jedną, kilka lub All."
     )
 
-    # --- logika poprawnego działania 'All' ---
-    if "All" in selection and len(selection) > 1:
-        selection = ["All"]
+    # --- logika wymuszająca poprawne zachowanie ---
+    if "All" in st.session_state.selection and len(st.session_state.selection) > 1:
+        st.session_state.selection = ["All"]
+
+    # poprawiamy selection używany dalej w kodzie
+    selection = st.session_state.selection
+
 
 
 
@@ -182,7 +193,7 @@ if len(selected_ids) == 1:
         # Price + MA
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=single["ts"], y=single["price"], mode="lines", name="Price",
+            x=single["ts"], y=single["price"], mode="lines", name="Cena",
             line=dict(width=2, color=color_map[id_to_name[cid]])
         ))
         fig.add_trace(go.Scatter(x=single["ts"], y=single["MA7"],  mode="lines", name="MA 7",
