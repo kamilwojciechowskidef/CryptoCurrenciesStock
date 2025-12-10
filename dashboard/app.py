@@ -106,26 +106,30 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
 
-    # lista opcji
-    options = ["Wybierz wszystkie"] + all_names
+    options = ["Select all"] + all_names
 
-    # inicjalizacja stanu
-    if "Wybierz wszystkie" not in st.session_state:
-        st.session_state.selection = all_names  # domyślnie wszystko zaznaczone
+    # inicjalizacja tylko raz
+    if "selection" not in st.session_state:
+        st.session_state.selection = all_names.copy()
 
-    # komponent multiselect BEZ default= (bo używamy session_state)
+    # komponent multiselect
     selection = st.multiselect(
         f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
         options,
-        key="selection",
-        help="Wybierz jedną, kilka lub użyj opcji Wybierz wszystkie."
+        default=st.session_state.selection,
+        key="selection_widget",
+        help="Wybierz jedną, kilka lub użyj opcji Select all."
     )
 
-    # logika "Select all"
-    if "Wybierz wszystkie" in st.session_state.selection:
-        # ustawiamy faktyczne wartości: wszystkie monety
-        st.session_state.selection = all_names
+    # Jeśli użytkownik kliknął "Select all"
+    if "Select all" in selection:
+        st.session_state.selection = all_names.copy()
+        st.session_state.selection_widget = all_names.copy()
         st.rerun()
+
+    else:
+        # normalne zachowanie wielokrotnego wyboru
+        st.session_state.selection = selection
 
     # wynik do dalszego kodu
     selection = st.session_state.selection
