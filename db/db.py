@@ -1,69 +1,113 @@
 import os
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL
+import requests
+from dotenv import load_dotenv
 import pandas as pd
 
-url = URL.create(
-    drivername="postgresql+psycopg",
-    username=os.getenv("POSTGRES_USER"),
-    password=os.getenv("POSTGRES_PASSWORD"),
-    host=os.getenv("POSTGRES_HOST"),
-    port=int(os.getenv("POSTGRES_PORT")),
-    database=os.getenv("POSTGRES_DB"),
-)
+# Wczytanie .env
+load_dotenv("etl/.env", encoding="utf-8")
 
-# kontrolnie – sprawdź typ i ewentualne nie-ASCII (powinno być pusto)
-dsn = str(url)
-print("TYPE:", type(dsn).__name__)
-print("NON-ASCII:", [(i, ch, hex(ord(ch))) for i, ch in enumerate(dsn) if ord(ch) > 127])
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+TABLE = os.getenv("DATA_TABLE", "crypto_prices")
 
-engine = create_engine(url, pool_pre_ping=True, future=True)
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
 
-def init_table():
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS crypto_prices (
-        id SERIAL PRIMARY KEY,
-        coin_id TEXT,
-        symbol TEXT,
-        name TEXT,
-        current_price NUMERIC,
-        market_cap BIGINT,
-        total_volume BIGINT,
-        high_24h NUMERIC,
-        low_24h NUMERIC,
-        price_change_percentage_24h NUMERIC,
-        last_updated TIMESTAMP
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_crypto_prices_symbol_ts
-        ON crypto_prices(symbol, last_updated);
+# ==============================
+#  INSERT
+# ==============================
+def insert_data(records):
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
+    res = requests.post(url, headers=HEADERS, json=records)
+    if res.status_code in (200, 201, 204):
+        print(f"✅ Wstawiono {len(records)} rekordów.")
+    else:
+        print(f"⚠️ Błąd ({res.status_code}): {res.text}")
+
+
+# ==============================
+#  LIST COINS
+# ==============================
+def list_coins():
     """
-    with engine.begin() as conn:
-        conn.execute(text(create_table_query))
-        print("[INFO] Table checked/created.")
+    Zwraca listę unikalnych kryptowalut: coin_id + name.
+    """
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
+    params = {
+        "select": "coin_id,name",
+        "order": "coin_id",
+    }
+    res = requests.get(url, headers=HEADERS, params=params)
+    res.raise_for_status()
 
-def save_to_db(df: pd.DataFrame):
-    # UPSERT po (symbol, last_updated)
-    records = df.to_dict(orient="records")
-    if not records:
-        print("[INFO] Nothing to save.")
-        return
+    df = pd.DataFrame(res.json()).drop_duplicates(["coin_id"])
+    return df
 
-    cols = [
-        "coin_id","symbol","name","current_price","market_cap","total_volume",
-        "high_24h","low_24h","price_change_percentage_24h","last_updated"
-    ]
 
-    with engine.begin() as conn:
-        # budujemy insert przez tekstowy SQL z ON CONFLICT DO NOTHING (prosty i szybki)
-        insert_sql = """
-        INSERT INTO crypto_prices
-        (coin_id, symbol, name, current_price, market_cap, total_volume,
-         high_24h, low_24h, price_change_percentage_24h, last_updated)
-        VALUES
-        (:coin_id, :symbol, :name, :current_price, :market_cap, :total_volume,
-         :high_24h, :low_24h, :price_change_percentage_24h, :last_updated)
-        ON CONFLICT (symbol, last_updated) DO NOTHING;
-        """
-        conn.execute(text(insert_sql), records)
-        print(f"[INFO] Upserted {len(records)} rows.")
-        
+# ==============================
+#  HISTORY FOR ONE COIN
+# ==============================
+def get_history(coin_id: str, start, end):
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
+
+    params = {
+        "select": "coin_id,name,current_price,total_volume,date_",
+        "coin_id": f"eq.{coin_id}",
+        "and": f"(date_.gte.{start.isoformat()},date_.lte.{end.isoformat()})",
+        "order": "date_.asc"
+    }
+
+    res = requests.get(url, headers=HEADERS, params=params)
+    res.raise_for_status()
+
+    df = pd.DataFrame(res.json())
+    if df.empty:
+        return df
+
+    return df.rename(columns={
+        "current_price": "price",
+        "total_volume": "volume",
+        "date_": "ts"
+    })
+
+
+
+
+# ==============================
+#  HISTORY FOR ALL COINS
+# ==============================
+def get_history_all(start, end):
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE}"
+
+    params = {
+        "select": "coin_id,name,current_price,total_volume,date_",
+        "and": f"(date_.gte.{start.isoformat()},date_.lte.{end.isoformat()})",
+        "order": "date_.asc"
+    }
+
+    res = requests.get(url, headers=HEADERS, params=params)
+    res.raise_for_status()
+
+    df = pd.DataFrame(res.json())
+    if df.empty:
+        return df
+
+    return df.rename(columns={
+        "current_price": "price",
+        "total_volume": "volume",
+        "date_": "ts"
+    })
+
+
+
+
+# ==============================
+#  CLEAR TABLE
+# ==============================
+def clear_table():
+    url = f"{SUPABASE_URL}/rest/v1/{TABLE}?id=neq.0"
+    res = requests.delete(url, headers=HEADERS)
+    print("🗑️ Tabela wyczyszczona." if res.ok else f"⚠️ Błąd czyszczenia: {res.text}")

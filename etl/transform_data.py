@@ -1,21 +1,63 @@
+# transform_data.py
 import pandas as pd
 
-def transform_crypto_data(raw_data):
-    df = pd.DataFrame(raw_data)
-    # CoinGecko zwraca m.in. 'id', 'symbol', 'name', 'last_updated' itd.
-    df["coin_id"] = df["id"]  # mapujemy id -> coin_id dla spójności ze schematem
-    selected_columns = [
-        "coin_id",
-        "symbol",
-        "name",
-        "current_price",
-        "market_cap",
-        "total_volume",
-        "high_24h",
-        "low_24h",
-        "price_change_percentage_24h",
-        "last_updated",
-    ]
-    df = df[selected_columns]
-    df["last_updated"] = pd.to_datetime(df["last_updated"], utc=True).dt.tz_convert(None)
+def _to_datetime_utc(series):
+    return pd.to_datetime(series, utc=True, errors="coerce")
+
+def history_postprocess(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Dla jednej kryptowaluty: rzutowania typów, sort, ret, MA7/MA30.
+    Wejście kolumny: ts, price, volume
+    """
+    df = df.copy()
+    df["ts"] = _to_datetime_utc(df["ts"])
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["ts", "price"]).sort_values("ts").reset_index(drop=True)
+    df["ret"]  = df["price"].pct_change()
+    df["ma7"]  = df["price"].rolling(7, min_periods=1).mean()
+    df["ma30"] = df["price"].rolling(30, min_periods=1).mean()
     return df
+
+def allcoins_postprocess(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Dla wszystkich kryptowalut w zakresie: rzutowania i porządkowanie.
+    Wejście kolumny: coin_id, name, symbol, ts, price, volume
+    """
+    df = df.copy()
+    df["ts"] = _to_datetime_utc(df["ts"])
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["ts", "price"]).sort_values(["coin_id", "ts"]).reset_index(drop=True)
+    return df
+
+def add_index_100(df: pd.DataFrame) -> pd.DataFrame:
+    """Dodaje kolumnę price_norm = price / first(price in group) * 100 (per coin)."""
+    df = df.copy()
+    first = df.groupby("coin_id")["price"].transform("first")
+    df["price_norm"] = (df["price"] / first) * 100
+    return df
+
+def aggregate_volume(df: pd.DataFrame) -> pd.DataFrame:
+    """Suma wolumenów per coin (z wypełnieniem NaN->0)."""
+    vol = (df.groupby(["coin_id", "name"], as_index=False)["volume"].sum(min_count=1))
+    vol["volume"] = vol["volume"].fillna(0)
+    vol["label"] = vol["name"].fillna(vol["coin_id"])
+    return vol.sort_values(by="volume", ascending=False)
+def volume_with_share(df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    Przyjmuje df_all po allcoins_postprocess (kolumny: coin_id, name, volume ...).
+    Zwraca: coin_id, name, label, volume, share (w %), posortowane malejąco.
+    """
+    vol = (df_all.groupby(["coin_id", "name"], as_index=False)["volume"]
+                 .sum(min_count=1))
+    vol["volume"] = pd.to_numeric(vol["volume"], errors="coerce").fillna(0)
+    vol["label"] = vol["name"].fillna(vol["coin_id"])
+
+    total = vol["volume"].sum()
+    if total and total > 0:
+        vol["share"] = (vol["volume"] / total) * 100.0
+    else:
+        vol["share"] = 0.0
+
+    return vol.sort_values(by="volume", ascending=False).reset_index(drop=True)
