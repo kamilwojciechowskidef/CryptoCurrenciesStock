@@ -106,7 +106,7 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
 
-    options = ["Select all"] + all_names
+    options = ["Wybierz wszystkie", *all_names]
 
     # inicjalizacja tylko raz
     if "selection" not in st.session_state:
@@ -118,11 +118,11 @@ with col_f1:
         options,
         default=st.session_state.selection,
         key="selection_widget",
-        help="Wybierz jedną, kilka lub użyj opcji Select all."
+        help="Wybierz jedną, kilka lub użyj opcji Wybierz wszystkie."
     )
 
     # Jeśli użytkownik kliknął "Select all"
-    if "Select all" in selection:
+    if "Wybierz wszystkie" in selection:
         st.session_state.selection = all_names.copy()
         st.session_state.selection_widget = all_names.copy()
         st.rerun()
@@ -247,7 +247,7 @@ else:
             cols = st.columns(n)
             for c, t in zip(cols, tiles[i:i+n]):
                 with c:
-                    st.metric(label=f"{t['name']} — Current", value=f"${t['cur']:,.2f}",
+                    st.metric(label=f"{t['name']} — Obecnie", value=f"${t['cur']:,.2f}",
                               delta=(f"{t['d7']:.2f}% vs 7d" if pd.notna(t["d7"]) else "—"))
                     if pd.notna(t["d30"]):
                         st.caption(f"Δ30d: {t['d30']:.2f}%")
@@ -374,15 +374,15 @@ st.caption(
 # Oblicz dzienne zwroty i skumulowany zwrot
 returns = hist_all.pivot(index="ts", columns="coin_id", values="price").pct_change()
 cum_returns = (1 + returns).cumprod() - 1
-cum_returns = cum_returns.reset_index().melt(id_vars="ts", var_name="coin_id", value_name="cum_return")
+cum_returns = cum_returns.reset_index().melt(id_vars="ts", var_name="Kryptowaluty", value_name="cum_return")
 
 fig_cum = px.line(
     cum_returns,
     x="ts",
     y="cum_return",
     color="coin_id",
-    title="Cumulative Returns Over Time",
-    labels={"cum_return": "Kumulowany zwrot", "ts": "Data", "coin": "Kryptowaluta"},
+    title="Kumulowane zwroty w czasie",
+    labels={"cum_return": "Kumulowany zwrot", "ts": "Czas", "coin": "Kryptowaluty"},
 )
 
 fig_cum.update_layout(
@@ -416,7 +416,7 @@ fig_risk = px.scatter(
     labels={
         "volatility": "Ryzyko",
         "avg_return": "Średni dzienny zwrot",
-        "coin_id": "Kryptowaluta",
+        "coin_id": "Kryptowaluty",
     },
     trendline="ols",
 )
@@ -455,7 +455,7 @@ fig_share_evo = px.area(
     y="share",
     color="coin_id",
     title="Evolucja udziału w rynku",
-    labels={"share": "Udział w rynku (%)", "ts": "Data", "coin_id": "Kryptowaluta"},
+    labels={"share": "Udział w rynku (%)", "ts": "Data", "coin_id": "Kryptowaluty"},
     groupnorm="fraction",
 )
 
