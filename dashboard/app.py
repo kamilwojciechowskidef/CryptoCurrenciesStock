@@ -241,14 +241,14 @@ st.caption(
 )
 
 # 1) Indeks 100 na starcie okresu
-st.subheader("Cena (indeksowana do 100 w okresie rozpoczęcia)")
+st.subheader("Cena (indeksowana do 100% w okresie rozpoczęcia)")
 norm = index_to_100(hist_all.rename(columns={"price": "price"}), price_col="price", group_col="coin_id")
 norm["name"] = norm["coin_id"].map(id_to_name)
 
 fig_norm = px.line(
     norm, x="ts", y="price_norm", color="name",
     color_discrete_map=color_map,
-    labels={"ts": "Time", "price_norm": "Index (100=start)"},
+    labels={"ts": "Czas", "price_norm": "Indeks (100%=początkowy)"},
     height=380,
 )
 fig_norm.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
