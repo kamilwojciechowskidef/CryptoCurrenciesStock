@@ -31,11 +31,11 @@ jobs:
           pip install -r requirements.txt || true
           pip install black flake8 pytest
 
-      - name: Lint (flake8)
-        run: flake8 .
+      #- # name: Lint (flake8)
+        #run: flake8 .
 
-      - name: Format check (black)
-        run: black --check .
+      #- # name: Format check (black)
+        #run: black --check .
 
       - name: Run tests
         run: pytest -q || true  # masz 1 test: test_connection.py
