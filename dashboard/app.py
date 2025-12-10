@@ -106,7 +106,7 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
     selection = st.multiselect(
-        f"Wybierz kryptowalute {one_year_ago} to {now.date()}",
+        f"Wybierz kryptowalute i zakres dat  od {one_year_ago} do {now.date()}",
         ["All"] + all_names,
         default=["All"],
         help="Możesz wybrać jedną, kilka lub All.",
@@ -216,7 +216,7 @@ else:
         })
 
     if tiles:
-        st.subheader("Selected coins — quick view")
+        st.subheader("Wybrane kryptowaluty — podsumowanie")
         n = 3
         for i in range(0, len(tiles), n):
             cols = st.columns(n)
