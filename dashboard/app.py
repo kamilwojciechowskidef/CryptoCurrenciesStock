@@ -106,25 +106,30 @@ now = datetime.now(timezone.utc)
 one_year_ago = (datetime.now() - timedelta(days=365)).date()
 with col_f1:
 
-    # --- inicjalizacja stanu (tylko raz) ---
-    if "selection" not in st.session_state:
-        st.session_state.selection = ["All"]
+    # lista opcji
+    options = ["Wybierz wszystkie"] + all_names
 
-    # --- komponent multiselect ---
+    # inicjalizacja stanu
+    if "Wybierz wszystkie" not in st.session_state:
+        st.session_state.selection = all_names  # domyślnie wszystko zaznaczone
+
+    # komponent multiselect BEZ default= (bo używamy session_state)
     selection = st.multiselect(
         f"Wybierz kryptowalutę i zakres dat od {one_year_ago} do {now.date()}",
-        ["All"] + all_names,
-        default=st.session_state.selection,
+        options,
         key="selection",
-        help="Możesz wybrać jedną, kilka lub All."
+        help="Wybierz jedną, kilka lub użyj opcji Wybierz wszystkie."
     )
 
-    # --- logika wymuszająca poprawne zachowanie ---
-    if "All" in st.session_state.selection and len(st.session_state.selection) > 1:
-        st.session_state.selection = ["All"]
+    # logika "Select all"
+    if "Wybierz wszystkie" in st.session_state.selection:
+        # ustawiamy faktyczne wartości: wszystkie monety
+        st.session_state.selection = all_names
+        st.rerun()
 
-    # poprawiamy selection używany dalej w kodzie
+    # wynik do dalszego kodu
     selection = st.session_state.selection
+
 
 
 
@@ -132,14 +137,14 @@ with col_f1:
 years = list(range(now.year - 1, now.year + 1))
 
 with col_f2:
-    start_year = st.selectbox("Start year", years, index=max(0, years.index(now.year) - 1))
+    start_year = st.selectbox("Rok początkowy", years, index=max(0, years.index(now.year) - 1))
 with col_f3:
-    start_month = st.selectbox("Start month", list(range(1, 13)), index=now.month - 1)
+    start_month = st.selectbox("Miesiąc początkowy", list(range(1, 13)), index=now.month - 1)
 
 with col_f4:
-    end_year = st.selectbox("End year", years, index=years.index(now.year))
+    end_year = st.selectbox("Końcowy rok", years, index=years.index(now.year))
 with col_f5:
-    end_month = st.selectbox("End month", list(range(1, 13)), index=now.month - 1)
+    end_month = st.selectbox("Końcowy miesiąc", list(range(1, 13)), index=now.month - 1)
 
 start_dt = first_day(start_year, start_month)
 end_dt = last_month_start(end_year, end_month)  # [start_dt, end_dt)
