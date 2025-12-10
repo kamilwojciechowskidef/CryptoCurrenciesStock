@@ -119,35 +119,93 @@ else:
 
 selected_ids = [name_to_id[n] for n in selected_names]
 
-# ---- wybór dat (od-do) ----
-col_d1, col_d2 = st.columns([1, 1])
+# -----------------------------------------------------------
+# 🔍 FILTRY: Wybór kryptowalut + dynamiczny zakres dat z bazy
+# -----------------------------------------------------------
 
-today = datetime.now(timezone.utc).date()
-year_ago = today - timedelta(days=365)
+st.subheader("Filtry danych")
+
+# ============================
+# 1️⃣ Wybór kryptowalut
+# ============================
+
+with st.container():
+    selection = st.multiselect(
+        "Wybierz kryptowalutę (gdy nie wybierzesz nic — pokażemy wszystkie):",
+        all_names,
+        help="Możesz wybrać jedną lub wiele kryptowalut."
+    )
+
+# jeśli nic nie wybrano → traktujemy jak „wszystkie”
+if not selection:
+    selected_names = all_names
+else:
+    selected_names = selection
+
+selected_ids = [name_to_id[n] for n in selected_names]
+
+
+# ============================
+# 2️⃣ Dynamiczny zakres dat — min/max z bazy
+# ============================
+
+@st.cache_data(ttl=300)
+def get_global_date_range():
+    """Pobiera minimalną i maksymalną datę z tabeli historii."""
+    # pobieramy dane z ogromnego zakresu — ale cache sprawia, że nie boli
+    df = cached_get_history_all(datetime(1970, 1, 1, tzinfo=timezone.utc),
+                                datetime.now(timezone.utc))
+    if df.empty:
+        return None, None
+
+    df = ensure_ts_utc(df)
+    return df["ts"].min(), df["ts"].max()
+
+
+db_min_ts, db_max_ts = get_global_date_range()
+
+if db_min_ts is None or db_max_ts is None:
+    st.error("Brak danych w bazie — dashboard nie może ustawić zakresu dat.")
+    st.stop()
+
+db_min_date = db_min_ts.date()
+db_max_date = db_max_ts.date()
+
+# sugerowany start → max(zakres − 365 dni, najstarsza data)
+suggested_start = max(db_min_date, db_max_date - timedelta(days=365))
+
+
+# ============================
+# 3️⃣ Datepickery ograniczone zakresem danych
+# ============================
+
+col_d1, col_d2 = st.columns(2)
 
 with col_d1:
     start_date = st.date_input(
-        "Data początkowa",
-        value=year_ago,
-        max_value=today
+        "Data początkowa:",
+        value=suggested_start,
+        min_value=db_min_date,
+        max_value=db_max_date
     )
 
 with col_d2:
     end_date = st.date_input(
-        "Data końcowa",
-        value=today,
+        "Data końcowa:",
+        value=db_max_date,
         min_value=start_date,
-        max_value=today
+        max_value=db_max_date
     )
 
-# konwersja na datetime z UTC
+# konwersja na datetime UTC
 start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
 end_dt   = datetime.combine(end_date,   datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
 
-# walidacja dat
+# walidacja
 if end_dt <= start_dt:
-    st.warning("Zakres dat jest pusty. Wybierz poprawny przedział.")
+    st.warning("Zakres dat jest pusty — wybierz poprawny przedział.")
     st.stop()
+
 
 
 # wybór monet
