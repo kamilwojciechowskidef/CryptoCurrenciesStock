@@ -119,22 +119,41 @@ else:
 
 selected_ids = [name_to_id[n] for n in selected_names]
 
-
-
-
-
-
 years = list(range(now.year - 1, now.year + 1))
 
-with col_f2:
-    start_year = st.selectbox("Rok początkowy", years, index=max(0, years.index(now.year) - 1))
-with col_f3:
-    start_month = st.selectbox("Miesiąc początkowy", list(range(1, 13)), index=now.month - 1)
+# ---- wybór dat (od-do) ----
+col_d1, col_d2 = st.columns([1, 1])
 
-with col_f4:
-    end_year = st.selectbox("Końcowy rok", years, index=years.index(now.year))
-with col_f5:
-    end_month = st.selectbox("Końcowy miesiąc", list(range(1, 13)), index=now.month - 1)
+today = datetime.now(timezone.utc).date()
+year_ago = today - timedelta(days=365)
+
+with col_d1:
+    start_date = st.date_input(
+        "Data początkowa",
+        value=year_ago,
+        max_value=today
+    )
+
+with col_d2:
+    end_date = st.date_input(
+        "Data końcowa",
+        value=today,
+        min_value=start_date,
+        max_value=today
+    )
+
+# konwersja na datetime z UTC
+start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+end_dt   = datetime.combine(end_date,   datetime.min.time(), tzinfo=timezone.utc)
+
+# dodaj 1 dzień, by zakres był [start_dt, end_dt)
+end_dt = end_dt + timedelta(days=1)
+
+# walidacja
+if end_dt <= start_dt:
+    st.warning("Zakres dat jest pusty. Wybierz poprawny przedział.")
+    st.stop()
+
 
 start_dt = first_day(start_year, start_month)
 end_dt = last_month_start(end_year, end_month)  # [start_dt, end_dt)
