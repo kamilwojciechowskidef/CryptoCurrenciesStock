@@ -29,16 +29,16 @@ jobs:
       - name: Install deps
         run: |
           pip install -r requirements.txt || true
-          pip install black flake8 pytest
 
-      #- # name: Lint (flake8)
-        #run: flake8 .
-
-      #- # name: Format check (black)
-        #run: black --check .
+      # Flake8 i Black wyłączone
+      # - name: Lint (flake8)
+      #   run: flake8 .
+      #
+      # - name: Format check (black)
+      #   run: black --check .
 
       - name: Run tests
-        run: pytest -q || true  # masz 1 test: test_connection.py
+        run: pytest -q || true
 
 
   # ============================
