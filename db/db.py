@@ -13,7 +13,8 @@ TABLE = os.getenv("DATA_TABLE", "crypto_prices")
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "Prefer": "resolution=merge-duplicates"
 }
 
 # ==============================
@@ -21,12 +22,14 @@ HEADERS = {
 # ==============================
 def insert_data(records):
     url = f"{SUPABASE_URL}/rest/v1/{TABLE}?on_conflict=coin_id,date_"
+    
     res = requests.post(url, headers=HEADERS, json=records)
 
     if res.status_code in (200, 201, 204):
-        print(f"✅ Wstawiono/zmieniono {len(records)} rekordów.")
+        print(f"✅ Upsert udany — {len(records)} rekordów dodano lub zaktualizowano.")
     else:
         print(f"⚠️ Błąd ({res.status_code}): {res.text}")
+
 
 
 
